@@ -22,8 +22,8 @@ def _find_work_dirs() -> list[Path]:
     """Find usbliter8-fun work directories from multiple locations."""
     candidates = [
         Path(__file__).parent.parent / "referenceforAI",
-        Path("/home/kaffein/Desktop/W0lfSword/referenceforAI"),
-        Path("/home/kaffein/Desktop/W0lfSword/referenceforAI/projects"),
+        Path.home() / "Desktop" / "W0lfSword" / "referenceforAI",
+        Path.home() / "Desktop" / "W0lfSword" / "referenceforAI" / "projects",
     ]
     for base in candidates:
         if base.exists():

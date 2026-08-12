@@ -4,6 +4,43 @@
 
 A terminal-based (TUI) hub that automates building and flashing custom firmware, booting ramdisks, and post-exploit setup for iOS devices vulnerable to the usbliter8 SecureROM exploit.
 
+## Why usbliter8-arctic — vs the original usbliter8
+
+The original usbliter8 flow (rav000's RP2350 firmware + wh1te4ever's scripts)
+is raw scripts and hand-edited offsets. Arctic adds everything around it:
+
+- **Guided setup for beginners** — board picker, wiring diagrams, LED meaning
+  guide, troubleshooting, firmware download with UF2-magic validation and
+  retries. Original: "solder D+/D- and figure it out"
+- **Offset management system** — per-device/iOS YAML profiles with validation
+  (sentinel + type + hex checks), active-device config, online source lookup,
+  and a profile generator (`create`/`merge`/`diff`). Original: offsets
+  hardcoded inside `make_cfw.py`
+- **Beta-to-beta offset migration engine** — `profile_gen.py migrate` finds
+  every patch site in a new iOS beta automatically via AArch64 pattern
+  fingerprinting (immediates wildcarded, capstone-verified), with confidence
+  scoring, delta fallback, canonical `offsets.yaml` cross-check, and a
+  review report. Original: re-discover all offsets by hand every beta
+- **Hardware + device awareness** — RP2350 USB detection (VID/PID), Apple
+  DFU/WTF/restore detection, PWN DFU serial verification with polling.
+  Original: blind runs
+- **CFW builder with dry-run** — board-aware iBSS/iBEC/DeviceTree/kernel/
+  ramdisk paths (no hardcoded d421), dry-run simulation, correct IMG4 type
+  tags (`ibss`/`ibec`/`rdsk`/`dtre`), temp cleanup. Original: one device,
+  one path, no preview
+- **Safe restore flow** — pre-checks every script, PWN verification, TSS
+  proxy lifecycle management, explicit `YES` confirm, post-write validation.
+  Original: run `restore_cfw.sh` and pray
+- **Post-boot toolkit** — USB networking, VNC, SSH (password via `SSHPASS`
+  env, never in `ps` output), bootstrap install guide
+- **Dependency installer** — apt/pacman/dnf/brew/pip detection for pyusb,
+  pyyaml, libusb. Original: cryptic pip errors
+- **Health check** — one command verifies board, firmware, tools, USB, and
+  readiness before you flash
+- **Engineered, not hacked together** — 25-test pytest suite with a
+  ground-truth b2→b3 oracle regression, 21 bugs found and fixed via
+  systematic audit (`foundbugs.md`), session logging, colored TUI
+
 ## Supported Devices
 
 | Device | Chip | Board |
@@ -129,9 +166,35 @@ python3 device_offsets.py find iPhone11,8
 python3 profile_gen.py list
 python3 profile_gen.py create iPhone12,3 27.0
 
+# Offset migration — migrate patch offsets across beta builds
+python3 profile_gen.py migrate offsets/iPhone12,3_27.0b2.yaml offsets/iPhone12,3_27.0b3.yaml \
+    --comp-dir extracted/ --report migrate_report.md
+python3 profile_gen.py migrate offsets/iPhone12,3_27.0b3.yaml 27.0b4 --auto   # bootstrap a new beta
+
 # CFW builder (standalone)
 python3 cfw_builder.py iPhone12,3_27.0b3.ipsw offsets/iPhone12,3_27.0b3.yaml --check-only
 ```
+
+### Offset Migration (`profile_gen.py migrate`)
+
+Migrates patch offsets from a base profile to a target beta build using AArch64
+pattern fingerprinting (`fingerprint.py`): instruction immediates are wildcarded,
+the masked pattern is searched in the target binary, and hits are verified with
+capstone disassembly.
+
+- **Components** — provide `--comp-dir` with `base/` and `target/` raw files
+  (`kernelcache.raw`, `iBSS.raw`, `iBEC.raw`, `RestoreRamdisk.raw`, `TXM.raw`),
+  or `--fetch` to run the work dir's `get_fw.py`
+- **Confidence** — 0.95 unique+class-match / 0.90 unique string site /
+  0.60 ambiguous / 0.30 multi-hit (candidates) / delta-inferred always 0.30
+- **Output** — `migrate_report.md` with per-entry table, site hexdump,
+  `REVIEW REQUIRED` and `CANONICAL CONFLICTS` sections; `--auto` writes the
+  target profile with `migrated:` metadata and runs post-write validation
+- **Safety** — never trust anything below 0.90 without manual review;
+  delta inference is LOW by design
+
+Tests: `python3 -m pytest tests/ -q` (ground truth = b2 → b3 oracle in
+`OffsetMigrationChecklist.md`).
 
 ## Patch Overview
 
@@ -153,7 +216,9 @@ usbliter8-arctic/
 ├── cfw_builder.py       # CFW patching pipeline
 ├── pwn_utils.py         # USB detection and PWN verification
 ├── device_offsets.py    # YAML offset profile manager
-├── profile_gen.py       # Offset profile generator
+├── profile_gen.py       # Offset profile generator + beta-to-beta migration
+├── migrate.py           # Offset migration orchestrator (diff, canonical check, report)
+├── fingerprint.py       # AArch64 pattern fingerprint engine
 ├── log_utils.py         # Logging and retry helpers
 ├── colors.py            # TUI color theme
 ├── hardware_guide.py    # Guided setup, health checks, firmware flashing
