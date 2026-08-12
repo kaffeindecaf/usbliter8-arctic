@@ -1,34 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 668" width="1000" height="668">
   <title>Soldered Board Wiring — Pico 2 / RP2350-Zero / Tiny2350</title>
+  <defs>
+    <linearGradient id="cableGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6b7280"/>
+      <stop offset="0.45" stop-color="#39414c"/>
+      <stop offset="0.55" stop-color="#39414c"/>
+      <stop offset="1" stop-color="#525b66"/>
+    </linearGradient>
+    <linearGradient id="boardGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#42966d"/>
+      <stop offset="1" stop-color="#357a58"/>
+    </linearGradient>
+  </defs>
   <rect x="0" y="0" width="1000" height="668" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2"/>
 
   <text x="40" y="48" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#111827">Soldered Board Wiring</text>
-  <text x="40" y="76" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#6b7280">Pico 2 &#183; RP2350-Zero &#183; Tiny2350 &#8212; cut a Lightning-to-USB-A cable and solder to GPIO. All three boards use GP12 / GP13 / VBUS / GND.</text>
+  <text x="40" y="76" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#6b7280">Pico 2 &#183; RP2350-Zero &#183; Tiny2350 &#8212; cut a Lightning-to-USB-A cable, keep the Lightning end, solder the 4 wires to GPIO.</text>
 
-  <!-- ==================== Lightning cable (left) ==================== -->
-  <text x="77" y="272" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#4b5563">Lightning cable</text>
-  <rect x="18" y="286" width="118" height="64" rx="14" fill="#4b5563"/>
-  <line x1="45" y1="286" x2="45" y2="350" stroke="#374151" stroke-width="2" opacity="0.5"/>
-  <line x1="95" y1="286" x2="95" y2="350" stroke="#374151" stroke-width="2" opacity="0.5"/>
-  <text x="77" y="322" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#e5e7eb">USB-A end</text>
+  <!-- ==================== Cable (left) ==================== -->
+  <text x="130" y="264" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#4b5563">&#8592; to iPhone (Lightning end)</text>
+  <circle cx="38" cy="306" r="20" fill="url(#cableGrad)" stroke="#2f3540" stroke-width="1.5"/>
+  <rect x="30" y="286" width="200" height="40" fill="url(#cableGrad)"/>
+  <line x1="30" y1="306" x2="230" y2="306" stroke="#2f3540" stroke-width="1.5" opacity="0.45"/>
 
-  <line x1="148" y1="268" x2="148" y2="376" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 4"/>
-  <text x="148" y="260" text-anchor="middle" font-size="16" fill="#ef4444">&#9986;</text>
+  <!-- cut line + scissors -->
+  <line x1="245" y1="248" x2="245" y2="352" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="245" y="242" text-anchor="middle" font-size="16" fill="#ef4444">&#9986;</text>
+  <text x="245" y="372" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" fill="#ef4444">cut here</text>
+  <text x="245" y="382" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="9" fill="#9ca3af">discard USB-A plug</text>
 
-  <text x="136" y="297" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#dc2626">VBUS</text>
-  <text x="136" y="317" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#0284c7">D+</text>
-  <text x="136" y="337" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">D&#8722;</text>
-  <text x="136" y="357" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#374151">GND</text>
+  <!-- exposed wires -->
+  <line x1="248" y1="268" x2="330" y2="268" stroke="#dc2626" stroke-width="5" stroke-linecap="round"/>
+  <line x1="248" y1="292" x2="330" y2="292" stroke="#9ca3af" stroke-width="9" stroke-linecap="round"/>
+  <line x1="248" y1="292" x2="330" y2="292" stroke="#f3f4f6" stroke-width="5" stroke-linecap="round"/>
+  <line x1="248" y1="316" x2="330" y2="316" stroke="#16a34a" stroke-width="5" stroke-linecap="round"/>
+  <line x1="248" y1="340" x2="330" y2="340" stroke="#374151" stroke-width="5" stroke-linecap="round"/>
 
-  <!-- ==================== Wires ==================== -->
-  <path d="M 132 290 C 340 288, 540 178, 732 178" fill="none" stroke="#dc2626" stroke-width="7" stroke-linecap="round"/>
-  <path d="M 132 310 C 300 314, 415 408, 480 413.5" fill="none" stroke="#9ca3af" stroke-width="10" stroke-linecap="round"/>
-  <path d="M 132 310 C 300 314, 415 408, 480 413.5" fill="none" stroke="#f3f4f6" stroke-width="6" stroke-linecap="round"/>
-  <path d="M 132 330 C 300 334, 415 432, 480 429" fill="none" stroke="#16a34a" stroke-width="7" stroke-linecap="round"/>
-  <path d="M 132 350 C 340 352, 540 212, 732 209" fill="none" stroke="#374151" stroke-width="7" stroke-linecap="round"/>
+  <!-- wire labels with white halo -->
+  <text x="340" y="262" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#dc2626" paint-order="stroke" stroke="#ffffff" stroke-width="4">VBUS &#183; 5V</text>
+  <text x="340" y="286" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#0284c7" paint-order="stroke" stroke="#ffffff" stroke-width="4">D+</text>
+  <text x="340" y="310" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d" paint-order="stroke" stroke="#ffffff" stroke-width="4">D&#8722;</text>
+  <text x="340" y="334" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#374151" paint-order="stroke" stroke="#ffffff" stroke-width="4">GND</text>
+
+  <!-- ==================== Wires to board ==================== -->
+  <path d="M 330 268 C 480 268, 560 178, 734 178" fill="none" stroke="#dc2626" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 330 292 C 440 292, 420 400, 482 413" fill="none" stroke="#9ca3af" stroke-width="9" stroke-linecap="round"/>
+  <path d="M 330 292 C 440 292, 420 400, 482 413" fill="none" stroke="#f3f4f6" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 330 316 C 440 316, 420 432, 482 429" fill="none" stroke="#16a34a" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 330 340 C 480 340, 560 209, 734 209" fill="none" stroke="#374151" stroke-width="5" stroke-linecap="round"/>
 
   <!-- ==================== Pico 2 board ==================== -->
-  <rect x="440" y="140" width="340" height="370" rx="14" fill="#3d8b62" stroke="#1d4d36" stroke-width="3"/>
+  <rect x="444" y="144" width="340" height="370" rx="14" fill="#000000" opacity="0.12"/>
+  <rect x="440" y="140" width="340" height="370" rx="14" fill="url(#boardGrad)" stroke="#1d4d36" stroke-width="3"/>
   <text x="462" y="184" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" letter-spacing="2" fill="#e8f7ef" opacity="0.9">Raspberry Pi Pico 2</text>
   <text x="462" y="498" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" letter-spacing="1" fill="#bfe8d2" opacity="0.8">usbliter8</text>
 
@@ -51,15 +74,8 @@
   <line x1="635" y1="310" x2="635" y2="340" stroke="#4b5563" stroke-width="2"/>
   <line x1="645" y1="310" x2="645" y2="340" stroke="#4b5563" stroke-width="2"/>
   <line x1="575" y1="340" x2="645" y2="340" stroke="#4b5563" stroke-width="2"/>
-  <line x1="585" y1="340" x2="585" y2="332" stroke="#4b5563" stroke-width="2"/>
-  <line x1="595" y1="340" x2="595" y2="332" stroke="#4b5563" stroke-width="2"/>
-  <line x1="605" y1="340" x2="605" y2="332" stroke="#4b5563" stroke-width="2"/>
-  <line x1="615" y1="340" x2="615" y2="332" stroke="#4b5563" stroke-width="2"/>
-  <line x1="625" y1="340" x2="625" y2="332" stroke="#4b5563" stroke-width="2"/>
-  <line x1="635" y1="340" x2="635" y2="332" stroke="#4b5563" stroke-width="2"/>
 
   <!-- ==================== Pin pads ==================== -->
-  <!-- Left column pins 1-20 -->
   <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="9" fill="#0c3b26" opacity="0.85">
     <circle cx="484" cy="178" r="9" fill="#d9a441" stroke="#a8792a" stroke-width="1.5"/><circle cx="484" cy="178" r="4.5" fill="#263238"/><text x="499" y="181.5">1</text>
     <circle cx="484" cy="193.7" r="9" fill="#d9a441" stroke="#a8792a" stroke-width="1.5"/><circle cx="484" cy="193.7" r="4.5" fill="#263238"/><text x="499" y="197.2">2</text>
@@ -93,7 +109,6 @@
     <circle cx="484" cy="476.3" r="9" fill="#d9a441" stroke="#a8792a" stroke-width="1.5"/><circle cx="484" cy="476.3" r="4.5" fill="#263238"/><text x="499" y="479.8">20</text>
   </g>
 
-  <!-- Right column pins 40-21 -->
   <!-- Highlighted: pin 40 VBUS -->
   <circle cx="736" cy="178" r="13" fill="none" stroke="#dc2626" stroke-width="2.5"/>
   <circle cx="736" cy="178" r="9" fill="#d9a441" stroke="#a8792a" stroke-width="1.5"/><circle cx="736" cy="178" r="4.5" fill="#263238"/>
@@ -142,11 +157,9 @@
   <!-- ==================== Pad labels ==================== -->
   <text x="800" y="183" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#dc2626">VBUS &#183; 5V (red)</text>
   <text x="800" y="214" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#374151">GND (black)</text>
+  <text x="800" y="247" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#b45309">36 = 3V3 &#8212; do not use</text>
   <text x="412" y="418" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0284c7">GP12 &#183; D+ (white)</text>
   <text x="412" y="434" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#15803d">GP13 &#183; D&#8722; (green)</text>
-
-  <text x="440" y="532" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#6b7280">Other end of cable (Lightning) &#8594; iPhone</text>
-  <text x="800" y="532" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="11" fill="#6b7280">40-pin header &#183; pin 36 = 3V3 &#8212; avoid!</text>
 
   <!-- ==================== Warning card ==================== -->
   <rect x="40" y="560" width="920" height="86" rx="12" fill="#fff7e6" stroke="#f59e0b" stroke-width="2"/>
