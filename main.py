@@ -37,29 +37,55 @@ def clear():
     os.system("clear 2>/dev/null || true")
 
 
+WOLF_ASCII_ART = r'''
+                              __
+                            .d$$b
+                          .' TO$;\
+                         /  : TP._;
+                        / _.;  :Tb|
+                       /   /   ;j$j
+                   _.-"       d$$$$
+                 .' ..       d$$$$;
+                /  /P'      d$$$$P. |\
+               /   "      .d$$$P' |\^"l
+             .'           `T$P^"""""  :
+         ._.'      _.'                ;
+      `-.-".-'-' ._.       _.-"    .-"
+    `.-" _____  ._              .-"
+   -(.g$$$$$$$b.              .'
+     ""^^T$$$P^)            .(:
+       _/  -"  /.'         /:/;
+    ._.'-'`-'  ")/         /;/;
+ `-.-"..--""   " /         /  ;
+.-" ..--""        -'          :
+..--""--.-"         (\      .-(\
+  ..--""              `-\(\/;`
+    _.                      :
+                            ;`-
+                           :\
+                            ;  (by kaffein)'''
+
+WOLF_GRADIENT = [C.ICE] * 6 + [C.FROST] * 7 + [C.WOLF] * 7 + [C.MOON] * 6
+
+
 def show_wolf():
+    lines = [ln.rstrip() for ln in WOLF_ASCII_ART.strip("\n").splitlines()]
     print()
-    print(f"{C.WOLF}")
-    print("                          .d$$b")
-    print("                        .' TO$;\\")
-    print("                       /  : TP._;")
-    print("                      / _.;  :Tb|")
-    print("                     /   /   ;j$j")
-    print("                 _.-\"       d$$$$")
-    print("               .' ..       d$$$$;")
-    print("              /  /P'      d$$$$P. |\\")
-    print("             /   \"      .d$$$P' |\\^\"l")
-    print("           .'           `T$P^\"\"\"\"\"\"  :")
-    print(f"{C.NC}")
+    for i, art in enumerate(lines):
+        if i == len(lines) - 1 and art.endswith("(by kaffein)"):
+            body = art[: -len("(by kaffein)")]
+            art = body + f"{C.AMB}{C.B}(by kaffein){C.NC}"
+        color = WOLF_GRADIENT[min(i, len(WOLF_GRADIENT) - 1)]
+        print(f"  {color}{art}{C.NC}")
     print()
 
 
 def show_banner():
     print()
-    print(f"  {C.DIM}╔══════════════════════════════════════════════════════════════╗{C.NC}")
-    print(f"  {C.DIM}║{C.NC}  {C.SNOW}{C.B}usbliter8-arctic{C.NC}                                       {C.DIM}║{C.NC}")
-    print(f"  {C.DIM}║{C.NC}  {C.FROST}CFW Builder · PWN DFU · Restore · Boot{C.NC}                {C.DIM}║{C.NC}")
-    print(f"  {C.DIM}╚══════════════════════════════════════════════════════════════╝{C.NC}")
+    print(f"  {C.SNOW}{C.B}usbliter8-arctic{C.NC}")
+    print(f"  {C.FROST}CFW Builder · PWN DFU · Restore · Boot{C.NC}")
+    print(f"  {C.DIM}usbliter8 exploit by {C.NC}{C.DIM}rav000 · wh1te4ever · Octopus1633{C.NC}")
+    print()
 
 
 def show_device_status():
@@ -128,7 +154,7 @@ def menu():
 
         # Menu items — aligned columns with consistent spacing
         items = [
-            ("1", "Hardware Setup",     "Wiring guide · flash firmware · test PWN"),
+            ("1", "Guided Setup",       f"{C.AMB}★ recommended for beginners{C.NC} — wire · flash · test"),
             ("2", "Configure Device",   "Select model / iOS · edit offsets"),
             ("3", "Build CFW",          "Patch IPSW → custom firmware"),
             ("4", "Flash Device",       f"Restore CFW {C.RED}(ERASES DEVICE!){C.NC}"),
@@ -137,20 +163,22 @@ def menu():
             ("7", "Post-Boot Setup",    "USB network · VNC · SSH · bootstrap"),
             ("8", "Check PWN Status",   "Verify DFU / PWND state · wait for device"),
             ("9", "Health Check",       "Verify hardware, tools, firmware"),
+            ("i", "Install Dependencies", "pyusb · pyyaml · libusb"),
             ("0", "Explain",            "What can you do with usbliter8?"),
         ]
         for num, title, desc in items:
-            print(f"  {C.EYE}{C.B}[ {num} ]{C.NC}  {C.SNOW}{title:<20}{C.NC} {C.DIM}{desc}{C.NC}")
+            tcolor = C.AMB if num == "1" else C.SNOW
+            print(f"  {C.EYE}{C.B}[ {num} ]{C.NC}  {tcolor}{title:<20}{C.NC} {C.DIM}{desc}{C.NC}")
 
         print()
         print(f"  {C.GREY}── shortcuts ────────────────────────────────────────────────────{C.NC}")
         shortcuts = [
             ("h", "hw guide"), ("c", "config"), ("b", "build"),
             ("f", "flash"), ("p", "pwn check"), ("e", "explain"),
-            ("x", "health"), ("q", "quit"),
+            ("x", "health"), ("i", "deps"), ("q", "quit"),
         ]
         cols = 4
-        width = 17
+        width = 19
         rows = [shortcuts[i:i + cols] for i in range(0, len(shortcuts), cols)]
         for row in rows:
             cells = []
@@ -169,8 +197,8 @@ def menu():
 
         # Dispatch
         if choice in ("1", "h", "hw"):
-            from hardware_guide import interactive_hardware_setup
-            interactive_hardware_setup()
+            from hardware_guide import guided_setup
+            guided_setup()
 
         elif choice in ("2", "c", "config"):
             menu_configure()
@@ -203,6 +231,10 @@ def menu():
             from hardware_guide import run_health_check
             run_health_check()
 
+        elif choice in ("i", "deps"):
+            from deps import install_dependencies
+            install_dependencies()
+
         elif choice in ("0", "e", "explain"):
             from boot_chain import explain_usbliter8
             explain_usbliter8()
@@ -212,7 +244,7 @@ def menu():
             break
 
         else:
-            print(warn(f"Unknown: '{choice}' — try 1-9, h/c/b/f/p/e, or q"))
+            print(warn(f"Unknown: '{choice}' — try 1-9, h/c/b/f/p/e/x/i, or q"))
 
         input(f"\n  {C.DIM}── Press Enter to continue ──{C.NC}")
 

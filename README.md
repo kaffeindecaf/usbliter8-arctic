@@ -91,9 +91,11 @@ sudo ./main.py
 
 Select options from the interactive menu:
 
+> **★ New to usbliter8? Start with `1` / `h` — Guided Setup.** It walks you through hardware, firmware flashing and your first PWN with built-in checks and retries.
+
 | Key | Action |
 |-----|--------|
-| `1` / `h` | Hardware setup (wiring, flash firmware, troubleshoot) |
+| `1` / `h` | **Guided Setup** — ★ recommended for beginners (wiring, flash firmware, verify PWN) |
 | `2` / `c` | Configure device (select model/iOS offset profile) |
 | `3` / `b` | Build custom firmware from IPSW + offsets |
 | `4` / `f` | Flash CFW to device (erases all data) |
@@ -102,6 +104,7 @@ Select options from the interactive menu:
 | `7` | Post-boot setup (USB network, VNC, SSH, Sileo) |
 | `8` / `p` | Check PWN/DFU status |
 | `9` / `x` | Health check |
+| `i` | Install dependencies (pyusb, pyyaml, libusb) |
 | `0` / `e` | Explain capabilities |
 | `q` | Quit |
 
@@ -153,7 +156,8 @@ usbliter8-arctic/
 ├── profile_gen.py       # Offset profile generator
 ├── log_utils.py         # Logging and retry helpers
 ├── colors.py            # TUI color theme
-├── hardware_guide.py    # Hardware setup and firmware flashing
+├── hardware_guide.py    # Guided setup, health checks, firmware flashing
+├── deps.py              # Dependency checker & installer
 ├── offsets/             # Device offset YAML profiles
 │   ├── template.yaml
 │   ├── sources.yaml

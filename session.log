@@ -1,3 +1,0 @@
-[2026-08-11 22:29:46] [INFO ] Health check: FAILURES: ['board_configured', 'firmware_present', 'tools_ready', 'pyusb_available', 'rp2350_detected']
-[2026-08-11 22:32:56] [INFO ] Health check: FAILURES: ['board_configured', 'firmware_present', 'tools_ready', 'pyusb_available', 'rp2350_detected']
-[2026-08-11 22:38:30] [INFO ] Health check: FAILURES: ['board_configured', 'firmware_present', 'tools_ready', 'pyusb_available', 'rp2350_detected']

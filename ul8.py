@@ -21,7 +21,7 @@ if __name__ == "__main__":
         "command",
         nargs="?",
         default="menu",
-        help="Subcommand: menu, pwn, offsets, explain, health",
+        help="Subcommand: menu, pwn, offsets, explain, health, deps",
     )
     args = p.parse_args()
 
@@ -51,6 +51,9 @@ if __name__ == "__main__":
     elif args.command == "health":
         import hardware_guide
         hardware_guide.run_health_check()
+    elif args.command == "deps":
+        from deps import install_dependencies
+        install_dependencies()
     else:
         import main
         main.menu()
