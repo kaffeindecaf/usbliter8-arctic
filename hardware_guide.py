@@ -93,7 +93,7 @@ def check_firmware(board_id: str) -> bool:
     return validate_uf2(FW_DIR / fname)
 
 
-UF2_MAGICS = {0x0A324655, 0x9E5D5157, 0x0AB16F30, 0x00000000}
+UF2_MAGICS = {0x0A324655, 0x9E5D5157, 0x0AB16F30}
 
 
 def validate_uf2(path: Path) -> bool:
@@ -456,9 +456,9 @@ def run_health_check() -> dict[str, bool]:
     results["firmware_present"] = fw_ok
 
     # 3. Tools
-    from log_utils import check_tools
+    from log_utils import check_command
     required = ["usbliter8ctl"]
-    tools = check_tools(required)
+    tools = {t: (TOOLS_DIR / t).exists() or check_command(t) for t in required}
     for t, ok_val in tools.items():
         color = C.GRN if ok_val else C.RED
         print(key_value(f"Tool: {t}", f"{color}{'found' if ok_val else 'NOT FOUND'}{C.NC}"))
