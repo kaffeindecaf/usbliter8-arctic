@@ -129,9 +129,35 @@ python3 device_offsets.py find iPhone11,8
 python3 profile_gen.py list
 python3 profile_gen.py create iPhone12,3 27.0
 
+# Offset migration — migrate patch offsets across beta builds
+python3 profile_gen.py migrate offsets/iPhone12,3_27.0b2.yaml offsets/iPhone12,3_27.0b3.yaml \
+    --comp-dir extracted/ --report migrate_report.md
+python3 profile_gen.py migrate offsets/iPhone12,3_27.0b3.yaml 27.0b4 --auto   # bootstrap a new beta
+
 # CFW builder (standalone)
 python3 cfw_builder.py iPhone12,3_27.0b3.ipsw offsets/iPhone12,3_27.0b3.yaml --check-only
 ```
+
+### Offset Migration (`profile_gen.py migrate`)
+
+Migrates patch offsets from a base profile to a target beta build using AArch64
+pattern fingerprinting (`fingerprint.py`): instruction immediates are wildcarded,
+the masked pattern is searched in the target binary, and hits are verified with
+capstone disassembly.
+
+- **Components** — provide `--comp-dir` with `base/` and `target/` raw files
+  (`kernelcache.raw`, `iBSS.raw`, `iBEC.raw`, `RestoreRamdisk.raw`, `TXM.raw`),
+  or `--fetch` to run the work dir's `get_fw.py`
+- **Confidence** — 0.95 unique+class-match / 0.90 unique string site /
+  0.60 ambiguous / 0.30 multi-hit (candidates) / delta-inferred always 0.30
+- **Output** — `migrate_report.md` with per-entry table, site hexdump,
+  `REVIEW REQUIRED` and `CANONICAL CONFLICTS` sections; `--auto` writes the
+  target profile with `migrated:` metadata and runs post-write validation
+- **Safety** — never trust anything below 0.90 without manual review;
+  delta inference is LOW by design
+
+Tests: `python3 -m pytest tests/ -q` (ground truth = b2 → b3 oracle in
+`OffsetMigrationChecklist.md`).
 
 ## Patch Overview
 
@@ -153,7 +179,9 @@ usbliter8-arctic/
 ├── cfw_builder.py       # CFW patching pipeline
 ├── pwn_utils.py         # USB detection and PWN verification
 ├── device_offsets.py    # YAML offset profile manager
-├── profile_gen.py       # Offset profile generator
+├── profile_gen.py       # Offset profile generator + beta-to-beta migration
+├── migrate.py           # Offset migration orchestrator (diff, canonical check, report)
+├── fingerprint.py       # AArch64 pattern fingerprint engine
 ├── log_utils.py         # Logging and retry helpers
 ├── colors.py            # TUI color theme
 ├── hardware_guide.py    # Guided setup, health checks, firmware flashing
