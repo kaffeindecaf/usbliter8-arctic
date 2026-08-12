@@ -4,6 +4,43 @@
 
 A terminal-based (TUI) hub that automates building and flashing custom firmware, booting ramdisks, and post-exploit setup for iOS devices vulnerable to the usbliter8 SecureROM exploit.
 
+## Why usbliter8-arctic — vs the original usbliter8
+
+The original usbliter8 flow (rav000's RP2350 firmware + wh1te4ever's scripts)
+is raw scripts and hand-edited offsets. Arctic adds everything around it:
+
+- **Guided setup for beginners** — board picker, wiring diagrams, LED meaning
+  guide, troubleshooting, firmware download with UF2-magic validation and
+  retries. Original: "solder D+/D- and figure it out"
+- **Offset management system** — per-device/iOS YAML profiles with validation
+  (sentinel + type + hex checks), active-device config, online source lookup,
+  and a profile generator (`create`/`merge`/`diff`). Original: offsets
+  hardcoded inside `make_cfw.py`
+- **Beta-to-beta offset migration engine** — `profile_gen.py migrate` finds
+  every patch site in a new iOS beta automatically via AArch64 pattern
+  fingerprinting (immediates wildcarded, capstone-verified), with confidence
+  scoring, delta fallback, canonical `offsets.yaml` cross-check, and a
+  review report. Original: re-discover all offsets by hand every beta
+- **Hardware + device awareness** — RP2350 USB detection (VID/PID), Apple
+  DFU/WTF/restore detection, PWN DFU serial verification with polling.
+  Original: blind runs
+- **CFW builder with dry-run** — board-aware iBSS/iBEC/DeviceTree/kernel/
+  ramdisk paths (no hardcoded d421), dry-run simulation, correct IMG4 type
+  tags (`ibss`/`ibec`/`rdsk`/`dtre`), temp cleanup. Original: one device,
+  one path, no preview
+- **Safe restore flow** — pre-checks every script, PWN verification, TSS
+  proxy lifecycle management, explicit `YES` confirm, post-write validation.
+  Original: run `restore_cfw.sh` and pray
+- **Post-boot toolkit** — USB networking, VNC, SSH (password via `SSHPASS`
+  env, never in `ps` output), bootstrap install guide
+- **Dependency installer** — apt/pacman/dnf/brew/pip detection for pyusb,
+  pyyaml, libusb. Original: cryptic pip errors
+- **Health check** — one command verifies board, firmware, tools, USB, and
+  readiness before you flash
+- **Engineered, not hacked together** — 25-test pytest suite with a
+  ground-truth b2→b3 oracle regression, 21 bugs found and fixed via
+  systematic audit (`foundbugs.md`), session logging, colored TUI
+
 ## Supported Devices
 
 | Device | Chip | Board |
