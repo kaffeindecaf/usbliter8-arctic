@@ -36,7 +36,26 @@ A terminal-based (TUI) hub that automates building and flashing custom firmware,
 
 For boards without a built-in USB-A host port (Pico 2, RP2350-Zero, Tiny2350), cut a Lightning-to-USB-A cable and solder the four internal wires to the GPIO pins:
 
-![Soldered Board Wiring](diagrams/pico2_wiring.svg)
+```
+                   SOLDERED BOARD WIRING
+               Pico 2 · RP2350-Zero · Tiny2350
+
+    Cut a Lightning-to-USB-A cable. Keep the Lightning
+    end, discard the USB-A plug.
+
+   Lightning cable                  Pico 2 board
+   ┌─────────────────────┐      ┌───────────────────────────┐
+   │  Lightning end ►    │      │                           │
+   │      iPhone         │      │   ┌──────────────┐        │
+   └──────────┬──────────┘      │   │ USB-C ──► PC │        │
+              │                 │   └──────────────┘        │
+              ├─ Red   (VBUS)───┤─► VBUS (pin 40) ⚠ 5V!     │
+              ├─ White (D+)  ───┤─► GP12 (pin 16)           │
+              ├─ Green (D-)  ───┤─► GP13 (pin 17)           │
+              └─ Black (GND) ───┤─► GND  (pin 38)           │
+                                │                           │
+                                └───────────────────────────┘
+```
 
 > ⚠️ **Wire colors vary by brand.** Always verify continuity from the Lightning pin to each wire with a multimeter before soldering.
 >
