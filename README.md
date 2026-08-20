@@ -2,7 +2,7 @@
 
 > Tethered iOS jailbreak toolkit for A12/A13 — a TUI hub that automates the whole usbliter8 chain: guided hardware setup, offset profiles, CFW building, restore, and post-exploit setup on RP2350 boards.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-25%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-35%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 ## Why usbliter8-arctic?
 
@@ -32,6 +32,8 @@ The original flow (rav000's RP2350 firmware + wh1te4ever's scripts) is raw scrip
 | iPad Air 3 (WiFi / Cell) | A12 | j213ap / j214ap |
 | iPad 8 (WiFi / Cell) | A12 | j171ap / j172ap |
 | iPad 9 (WiFi / Cell) | A13 | j181ap / j182ap |
+
+> **Profile status** — verified offsets exist for iPhone 11 Pro (iPhone12,3) on 27.0b2/b3. A13 siblings (iPhone 11 / 11 Pro Max / SE 2 / iPad 9) have propagated kernel+daemon profiles with iBSS/iBEC/TXM offsets pending discovery; A12 devices need first-offset bootstrapping. Live status: `python3 profile_gen.py coverage`.
 
 ## How it works
 
@@ -129,6 +131,12 @@ python3 device_offsets.py find iPhone11,8                  # online offset sourc
 python3 profile_gen.py list                                # device database
 python3 profile_gen.py create iPhone12,3 27.0              # new profile (sentinel offsets)
 python3 profile_gen.py diff a.yaml b.yaml
+
+# Same-SoC device propagation — carry kernel/daemon offsets to another device
+python3 profile_gen.py propagate offsets/iPhone12,3_27.0b2.yaml iPhone12,1
+python3 profile_gen.py propagate offsets/iPhone12,3_27.0b2.yaml iPhone12,1 \
+    --comp-dir extracted/          # + auto-discover iBSS/iBEC/TXM via fingerprinting
+python3 profile_gen.py coverage    # per-device profile status table
 
 # Offset migration — carry patch offsets across beta builds
 python3 profile_gen.py migrate offsets/iPhone12,3_27.0b2.yaml offsets/iPhone12,3_27.0b3.yaml \

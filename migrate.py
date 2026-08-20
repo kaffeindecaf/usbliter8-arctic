@@ -542,12 +542,9 @@ def apply_offsets(target_path: Path, all_results: dict[str, list[MatchResult]],
                     entries[entry_name] = entry
             _update_entry(entry, r)
 
-    with open(target_path, "w") as f:
-        yaml.dump(profile, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    from device_offsets import dump_profile_yaml, validate_offsets
+    dump_profile_yaml(profile, target_path)
     print(ok(f"Offsets written to {target_path}"))
-
-    # 2.10: post-write validation
-    from device_offsets import validate_offsets
     passed, failed, errors = validate_offsets(target_path)
     if failed == 0:
         print(ok(f"Post-write validation: {passed} patches valid"))

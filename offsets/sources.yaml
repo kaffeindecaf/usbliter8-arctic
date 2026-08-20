@@ -6,7 +6,7 @@ repos:
     url: "https://github.com/wh1te4ever/usbliter8-fun"
     devices: ["iPhone12,3"]
     ios_versions: ["27.0b2", "27.0b3"]
-    notes: "Original CFW scripts + known-good kernel/iBoot/DT offsets for iPhone 11 Pro"
+    notes: "Original CFW scripts + known-good kernel/iBoot/DT offsets for iPhone 11 Pro. Kernel/daemon/ramdisk offsets are SoC-shared for the same build — propagate to A13 siblings with `profile_gen.py propagate` (iBSS/iBEC/TXM are device-specific)."
 
   - name: "W0lfSword offsets.m (kernel struct offsets A10-A18)"
     url: "https://github.com/kaffeindecaf/W0lfSword/blob/main/kexploit/offsets.m"
