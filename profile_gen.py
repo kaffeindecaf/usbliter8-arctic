@@ -33,9 +33,13 @@ DEVICE_DB = {
     "iPhone12,5": {"name": "iPhone 11 Pro Max",    "soc": "A13", "board": "d431ap",  "apticket": "t8030"},
     "iPhone12,8": {"name": "iPhone SE (2nd gen)",  "soc": "A13", "board": "d79ap",   "apticket": "t8030"},
     "iPad11,1":   {"name": "iPad mini 5 (WiFi)",   "soc": "A12", "board": "j211ap",  "apticket": "t8020"},
+    "iPad11,2":   {"name": "iPad mini 5 (Cell)",   "soc": "A12", "board": "j212ap",  "apticket": "t8020"},
     "iPad11,3":   {"name": "iPad Air 3 (WiFi)",    "soc": "A12", "board": "j213ap",  "apticket": "t8020"},
+    "iPad11,4":   {"name": "iPad Air 3 (Cell)",    "soc": "A12", "board": "j214ap",  "apticket": "t8020"},
     "iPad11,6":   {"name": "iPad 8 (WiFi)",        "soc": "A12", "board": "j171ap",  "apticket": "t8020"},
+    "iPad11,7":   {"name": "iPad 8 (Cell)",        "soc": "A12", "board": "j172ap",  "apticket": "t8020"},
     "iPad12,1":   {"name": "iPad 9 (WiFi)",        "soc": "A13", "board": "j181ap",  "apticket": "t8030"},
+    "iPad12,2":   {"name": "iPad 9 (Cell)",        "soc": "A13", "board": "j182ap",  "apticket": "t8030"},
 }
 
 
