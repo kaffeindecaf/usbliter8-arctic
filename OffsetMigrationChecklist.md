@@ -89,7 +89,7 @@ Agreed decisions: work-dir script shell-out for components, pytest, canonical
 - [ ] ~~commit~~ — deferred per user instruction (no commits/push yet)
 
 ### Contribution loop
-- [x] **2.15** PR drafted — `contribution/PR_DRAFT.md` (offsets.yaml fix: b2 block mislabeled + `ios_27_0b3` block added) + `contribution/migration-workflow.md` (workflow doc for the skill repo). Local canonical DB fixed + verified (cross-check now reports zero conflicts; backup at `/tmp/opencode/offsets.yaml.bak`). Opening the PR deferred per no-push instruction.
+- [x] **2.15** PR opened — https://github.com/kaffeindecaf/Apple-Bug-Bounty-Skill/pull/1 (offsets.yaml fix: b2 block mislabeled + `ios_27_0b3` block added, plus `docs/offset-migration-workflow.md`). Local canonical DB fixed + verified (cross-check reports zero conflicts; backup at `/tmp/opencode/offsets.yaml.bak`).
 
 ---
 
