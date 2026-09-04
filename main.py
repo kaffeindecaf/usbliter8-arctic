@@ -6,6 +6,7 @@ device restore, SSHRD/normal boot, post-exploit configuration.
 """
 
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -68,8 +69,12 @@ WOLF_ASCII_ART = r'''
 WOLF_GRADIENT = [C.ICE] * 6 + [C.FROST] * 7 + [C.WOLF] * 7 + [C.MOON] * 6
 
 
+def _wolf_art_lines() -> list[str]:
+    return [ln.rstrip() for ln in WOLF_ASCII_ART.strip("\n").splitlines()]
+
+
 def show_wolf():
-    lines = [ln.rstrip() for ln in WOLF_ASCII_ART.strip("\n").splitlines()]
+    lines = _wolf_art_lines()
     print()
     for i, art in enumerate(lines):
         if i == len(lines) - 1 and art.endswith("(by kaffein)"):
@@ -78,6 +83,56 @@ def show_wolf():
         color = WOLF_GRADIENT[min(i, len(WOLF_GRADIENT) - 1)]
         print(f"  {color}{art}{C.NC}")
     print()
+
+
+SCRAMBLE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&*+-=<>?/\\|"
+SCRAMBLE_SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+def wolf_scramble_frame(art: list[str], progress: int, rng: random.Random) -> list[str]:
+    """One scramble frame: each non-space char is settled (kept as-is) with
+    probability progress/100, otherwise replaced by a random char. Mirrors
+    W0lfSword's scramble_wolf frame logic."""
+    out = []
+    for line in art:
+        built = []
+        for ch in line:
+            if ch == " ":
+                built.append(" ")
+            elif rng.randint(0, 99) < progress:
+                built.append(ch)
+            else:
+                built.append(rng.choice(SCRAMBLE_CHARS))
+        out.append("".join(built))
+    return out
+
+
+def scramble_wolf(frames: int = 12, spinner: bool = True, pause: float = 0.05):
+    """Cmatrix-style scramble of the wolf art's own characters that settles
+    into the real art. Ported from W0lfSword's scramble_wolf (bash). Falls
+    back to a static wolf when stdout is not a terminal."""
+    if not sys.stdout.isatty():
+        show_wolf()
+        return
+    art = _wolf_art_lines()
+    rng = random.Random()
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        for f in range(frames):
+            progress = int(f * 100 / frames)
+            sys.stdout.write("\033[H\033[2J")
+            if spinner:
+                sys.stdout.write(f"  {C.EYE}{SCRAMBLE_SPIN[f % len(SCRAMBLE_SPIN)]}{C.NC} {C.DIM}loading...{C.NC}\n")
+            for line in wolf_scramble_frame(art, progress, rng):
+                sys.stdout.write("  " + line + "\n")
+            sys.stdout.flush()
+            time.sleep(pause)
+    finally:
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+    sys.stdout.write("\033[H\033[2J")
+    show_wolf()
 
 
 def show_banner():
@@ -146,7 +201,7 @@ def menu():
     while True:
         clear()
         if first_run:
-            show_wolf()
+            scramble_wolf()
             first_run = False
         show_banner()
         show_device_status()
