@@ -259,7 +259,12 @@ def patch_kernel(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> b
                 val = entry["value"]
                 name = entry.get("name", "kernel")
                 try:
-                    data = _hex_to_bytes(val)
+                    try:
+                        data = _hex_to_bytes(val)
+                    except ValueError:
+                        # ASCII payloads (e.g. the kernel identity string
+                        # "/PATCHED_ARM64_T8030") are written verbatim
+                        data = val.encode() if isinstance(val, str) else bytes(val)
                     _patch_at(fp, off, data)
                     count += 1
                     if VERBOSE:
