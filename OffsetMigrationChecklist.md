@@ -125,6 +125,7 @@ import a build nobody here has touched.**
 ### Reported, not applied (needs a device decision)
 - [ ] **3.10** b2 upstream also patches `restored_external` at 0x49E38 / 0x49DC0 and the kernel at 0x2126F18 (IOLog nop) / 0x216DD04 (AppleSEPManager `_powerChangeNotificationHandler`). The b3 script does not, so adding them to b2 only would break the b2/b3 entry pairing the migration tests rely on. Left in the audit report
 - [ ] **3.11** Liter8 covers sites our scheme has no entry for: `kernel.aks.*` (a 20-word inline rewrite instead of mov/ret), `kernel.credential-manager.*` (52), `kernel.persona.*`, `kernel.amfi.developer-mode.*`, `txm.constraints.restricted-entitlements`, `txm.developer-mode.publish`, `ibec.pinot.*`. 143 sites for n104 24A435
+- [ ] **3.13** The installed canonical `offsets.yaml` (`~/.config/opencode/skills/master-router/`) carried the same stale b3 values: its `ios_27_0b3` block now says `txm_queryModule0/1 = 0x39CA8/0x39E10` (backup at `/tmp/opencode/offsets.yaml.bak.20260920`). Needs a PR to Apple-Bug-Bounty-Skill like the previous one, otherwise `test_canonical_crosscheck_agrees_after_fix` only passes on machines with the local fix
 - [ ] **3.12** iPhone12,1 27.0 still needs 3 entries before it can flash: `ibec.keep_nonce_b`, `kernel.Post-validation bypass` (upstream uses `ff070071` on this build, not our `1f00006b`) and `kernel.AppleSEPKeyStore bypass`. Fetched components for 24A437/24A5380h/24A5370h (d421 and n104) make these discoverable with `profile_gen.py migrate --comp-dir`
 
 ---
