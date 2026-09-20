@@ -163,7 +163,10 @@ def test_record_then_match_and_wrong_component_blocks(component, profile_path):
 
 
 def test_evidence_file_is_cleaned_up(profile_path):
+    """The record test writes evidence for a fake profile name only, so real
+    profiles' evidence files are never touched by the suite."""
     path = ROOT / "offsets" / "evidence" / f"{profile_path.stem}.json"
+    assert profile_path.stem.endswith("_99.9"), "test must not use a real profile name"
     if path.exists():
         path.unlink()
 
