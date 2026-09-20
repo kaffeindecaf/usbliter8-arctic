@@ -138,7 +138,7 @@ def test_report_verdict_ready_and_review():
 
 
 def test_apply_offsets_skips_below_floor(tmp_path, capsys):
-    target = tmp_path / "iPhone12,1_27.0.yaml"
+    target = tmp_path / "iPhone12,1_99.9.yaml"
     target.write_text(yaml.safe_dump(_profile()))
     migrate.apply_offsets(target, {"ibss": [_result("ibss.image4_validate_nop", 0x2222,
                                                     confidence=0.30)]},
@@ -149,7 +149,7 @@ def test_apply_offsets_skips_below_floor(tmp_path, capsys):
 
 
 def test_apply_offsets_force_low_writes(tmp_path):
-    target = tmp_path / "iPhone12,1_27.0.yaml"
+    target = tmp_path / "iPhone12,1_99.9.yaml"
     target.write_text(yaml.safe_dump(_profile()))
     migrate.apply_offsets(target, {"ibss": [_result("ibss.image4_validate_nop", 0x2222,
                                                     confidence=0.30)]},
@@ -163,7 +163,7 @@ def test_apply_offsets_force_low_writes(tmp_path):
 # ── cfw_builder profile gate ──────────────────────────────────────
 
 def test_gate_blocks_pending_profile(tmp_path, capsys):
-    path = tmp_path / "iPhone12,1_27.0.yaml"
+    path = tmp_path / "iPhone12,1_99.9.yaml"
     path.write_text(yaml.safe_dump(_profile({
         "ibss": {"image4_validate_nop": {"offset": SENTINEL, "value": "1f2003d5",
                                          "pending": True}}})))
@@ -174,7 +174,7 @@ def test_gate_blocks_pending_profile(tmp_path, capsys):
 
 
 def test_gate_blocks_invalid_profile(tmp_path, capsys):
-    path = tmp_path / "iPhone12,1_27.0.yaml"
+    path = tmp_path / "iPhone12,1_99.9.yaml"
     path.write_text(yaml.safe_dump(_profile({
         "ibss": {"bad": {"offset": 0, "value": "1f2003d5"}}})))
     cfw_builder.FORCE = False
@@ -183,14 +183,16 @@ def test_gate_blocks_invalid_profile(tmp_path, capsys):
 
 
 def test_gate_allows_clean_profile(tmp_path, capsys):
-    path = tmp_path / "iPhone12,1_27.0.yaml"
+    """A clean profile must not be blocked. The name is deliberately one no
+    real profile uses, so committed evidence files cannot leak into it."""
+    path = tmp_path / "iPhone12,1_99.9.yaml"
     path.write_text(yaml.safe_dump(_profile()))
     cfw_builder.FORCE = False
     assert cfw_builder._profile_gate(path) is True
 
 
 def test_gate_force_overrides(tmp_path):
-    path = tmp_path / "iPhone12,1_27.0.yaml"
+    path = tmp_path / "iPhone12,1_99.9.yaml"
     path.write_text(yaml.safe_dump(_profile({
         "ibss": {"image4_validate_nop": {"offset": SENTINEL, "value": "1f2003d5",
                                          "pending": True}}})))

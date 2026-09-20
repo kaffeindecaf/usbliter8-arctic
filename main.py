@@ -588,9 +588,12 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="usbliter8-arctic — iOS exploit hub")
     p.add_argument("--dry-run", action="store_true", help="Simulate without modifying files")
-    p.add_argument("command", nargs="?", default="menu", help="Subcommand: menu, pwn, offsets, build, flash, boot, sshrd, net, vnc, explain")
-
-    args = p.parse_args()
+    p.add_argument("command", nargs="?", default="menu",
+                   help="Subcommand: menu, pwn, offsets, coverage, gaps, preflight, "
+                        "audit, fetch, migrate, build, flash, boot, sshrd, net, vnc, explain")
+    p.add_argument("profile", nargs="?", default="", help="profile path for preflight/audit")
+    # flags for the wrapped tool (--json, --fetch, --record, ...) pass through
+    args, extra = p.parse_known_args()
 
     if args.dry_run:
         import cfw_builder, boot_chain
@@ -609,5 +612,28 @@ if __name__ == "__main__":
     elif args.command == "explain":
         from boot_chain import explain_usbliter8
         explain_usbliter8()
+    elif args.command == "coverage":
+        import profile_gen
+        profile_gen.cmd_coverage(json_out="--json" in extra)
+    elif args.command == "gaps":
+        import profile_gen
+        profile_gen.cmd_gaps(json_out="--json" in extra)
+    elif args.command in ("preflight", "verify"):
+        import preflight
+        argv = ([args.profile] if args.profile else []) + extra
+        raise SystemExit(preflight.main(argv or None))
+    elif args.command == "fetch":
+        import fetch_components
+        raise SystemExit(fetch_components.main(extra))
+    elif args.command == "audit":
+        argv = ([args.profile] if args.profile else []) + extra
+        if not argv:
+            print(err("usage: main.py audit <make_cfw.py> <profile.yaml>"))
+            raise SystemExit(2)
+        import source_audit
+        raise SystemExit(source_audit.main(argv))
+    elif args.command == "migrate":
+        import migrate
+        migrate.cli_main(([args.profile] if args.profile else []) + extra)
     else:
         menu()
