@@ -38,18 +38,24 @@ DEVICE_DB = {
     "iPhone11,4": {"name": "iPhone XS Max (CN)",   "soc": "A12", "board": "d331pap", "apticket": "t8020"},
     "iPhone11,6": {"name": "iPhone XS Max",        "soc": "A12", "board": "d331ap",  "apticket": "t8020"},
     "iPhone11,8": {"name": "iPhone XR",            "soc": "A12", "board": "n841ap",  "apticket": "t8020"},
-    "iPhone12,1": {"name": "iPhone 11",            "soc": "A13", "board": "n104ap",  "apticket": "t8030"},
-    "iPhone12,3": {"name": "iPhone 11 Pro",        "soc": "A13", "board": "d421ap",  "apticket": "t8030"},
-    "iPhone12,5": {"name": "iPhone 11 Pro Max",    "soc": "A13", "board": "d431ap",  "apticket": "t8030"},
-    "iPhone12,8": {"name": "iPhone SE (2nd gen)",  "soc": "A13", "board": "d79ap",   "apticket": "t8030"},
+    "iPhone12,1": {"name": "iPhone 11",            "soc": "A13", "board": "n104ap",  "apticket": "t8030",
+                   "kernel_component": "kernelcache.release.iphone12b"},
+    "iPhone12,3": {"name": "iPhone 11 Pro",        "soc": "A13", "board": "d421ap",  "apticket": "t8030",
+                   "kernel_component": "kernelcache.release.iphone12"},
+    "iPhone12,5": {"name": "iPhone 11 Pro Max",    "soc": "A13", "board": "d431ap",  "apticket": "t8030",
+                   "kernel_component": "kernelcache.release.iphone12"},
+    "iPhone12,8": {"name": "iPhone SE (2nd gen)",  "soc": "A13", "board": "d79ap",   "apticket": "t8030",
+                   "kernel_component": "kernelcache.release.iphone12c"},
     "iPad11,1":   {"name": "iPad mini 5 (WiFi)",   "soc": "A12", "board": "j211ap",  "apticket": "t8020"},
     "iPad11,2":   {"name": "iPad mini 5 (Cell)",   "soc": "A12", "board": "j212ap",  "apticket": "t8020"},
     "iPad11,3":   {"name": "iPad Air 3 (WiFi)",    "soc": "A12", "board": "j213ap",  "apticket": "t8020"},
     "iPad11,4":   {"name": "iPad Air 3 (Cell)",    "soc": "A12", "board": "j214ap",  "apticket": "t8020"},
     "iPad11,6":   {"name": "iPad 8 (WiFi)",        "soc": "A12", "board": "j171ap",  "apticket": "t8020"},
     "iPad11,7":   {"name": "iPad 8 (Cell)",        "soc": "A12", "board": "j172ap",  "apticket": "t8020"},
-    "iPad12,1":   {"name": "iPad 9 (WiFi)",        "soc": "A13", "board": "j181ap",  "apticket": "t8030"},
-    "iPad12,2":   {"name": "iPad 9 (Cell)",        "soc": "A13", "board": "j182ap",  "apticket": "t8030"},
+    "iPad12,1":   {"name": "iPad 9 (WiFi)",        "soc": "A13", "board": "j181ap",  "apticket": "t8030",
+                   "kernel_component": "kernelcache.release.ipad12p"},
+    "iPad12,2":   {"name": "iPad 9 (Cell)",        "soc": "A13", "board": "j182ap",  "apticket": "t8030",
+                   "kernel_component": "kernelcache.release.ipad12p"},
 }
 
 
@@ -324,6 +330,18 @@ def cmd_propagate(args: list[str]):
                   f"kernel/daemon offsets are NOT shared across SoCs. Use --force to proceed anyway."))
         return
 
+    base_kernel = DEVICE_DB.get(base.get("model", ""), {}).get("kernel_component")
+    target_kernel = dev.get("kernel_component")
+    if base_kernel and target_kernel and base_kernel != target_kernel and not force:
+        print(err(f"kernel component mismatch: {base.get('model', '?')} ships {base_kernel}, "
+                  f"{model} ships {target_kernel}."))
+        print(f"  {C.DIM}Kernel partition offsets live in the kernelcache binary, which is a"
+              f" different file per board ({base_kernel} != {target_kernel}) — copying them"
+              f" would patch the wrong addresses. Discover them from the target's own"
+              f" kernelcache (python3 fetch_components.py ... --entries kernelcache)"
+              f" or pass --force.{C.NC}")
+        return
+
     tag = ios_tag or _tag_from_path(base_path)
     out_path = OFFSETS_DIR / f"{model}_{tag}.yaml"
     if out_path.exists() and not overwrite:
@@ -465,7 +483,9 @@ def cmd_list_templates():
     for model, info in sorted(DEVICE_DB.items()):
         has_profile = list(OFFSETS_DIR.glob(f"{model}_*.yaml"))
         status = C.GRN + "✓" if has_profile else C.AMB + "⚠"
-        print(f"  {status}{C.NC} {C.EYE}{info['name']:<22}{C.NC} {C.DIM}{model:<12}{C.NC} [{info['soc']}]  {info['board']}")
+        kernel = info.get("kernel_component", "kernelcache.release.?")
+        print(f"  {status}{C.NC} {C.EYE}{info['name']:<22}{C.NC} {C.DIM}{model:<12}{C.NC} "
+              f"[{info['soc']}]  {info['board']:<9} {C.DIM}{kernel}{C.NC}")
 
 
 if __name__ == "__main__":

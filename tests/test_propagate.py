@@ -101,15 +101,17 @@ def _load(path: Path) -> dict:
 # ── propagate: shared vs pending sections ───────────────────────────
 
 def test_propagate_copies_shared_and_marks_device_sections(offsets_dir, capsys):
-    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1"])
+    # iPhone12,5 ships the same kernelcache component as iPhone12,3
+    # (kernelcache.release.iphone12), so the kernel section may be copied.
+    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,5"])
 
-    out = offsets_dir / "iPhone12,1_27.0b2.yaml"
+    out = offsets_dir / "iPhone12,5_27.0b2.yaml"
     assert out.exists()
     prof = _load(out)
 
-    assert prof["device"] == "iPhone 11"
-    assert prof["model"] == "iPhone12,1"
-    assert prof["board"] == "n104ap"
+    assert prof["device"] == "iPhone 11 Pro Max"
+    assert prof["model"] == "iPhone12,5"
+    assert prof["board"] == "d431ap"
     assert prof["soc"] == "A13"
     assert prof["verification"] == "pending"
     assert prof["propagated_from"] == "iPhone12,3_27.0b2.yaml"
@@ -147,6 +149,18 @@ def test_propagate_refuses_cross_soc_without_force(offsets_dir):
     assert _load(out)["soc"] == "A12"
 
 
+def test_propagate_refuses_kernel_component_mismatch(offsets_dir, capsys):
+    """iPhone12,1 ships kernelcache.release.iphone12b while iPhone12,3 ships
+    kernelcache.release.iphone12 — kernel offsets must not be copied across."""
+    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1"])
+    assert not (offsets_dir / "iPhone12,1_27.0b2.yaml").exists()
+    assert "kernel component mismatch" in capsys.readouterr().out
+
+    profile_gen.cmd_propagate(
+        [str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1", "--force"])
+    assert (offsets_dir / "iPhone12,1_27.0b2.yaml").exists()
+
+
 def test_propagate_refuses_pending_base(offsets_dir):
     base = _base_profile()
     base["verification"] = "pending"
@@ -156,10 +170,10 @@ def test_propagate_refuses_pending_base(offsets_dir):
 
 
 def test_propagate_overwrite_prompt_declined(offsets_dir, monkeypatch, capsys):
-    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1"])
+    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,5"])
     monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
-    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1"])
-    out = _load(offsets_dir / "iPhone12,1_27.0b2.yaml")
+    profile_gen.cmd_propagate([str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,5"])
+    out = _load(offsets_dir / "iPhone12,5_27.0b2.yaml")
     # still the first-generation file (propagated_from unchanged)
     assert out["propagated_from"] == "iPhone12,3_27.0b2.yaml"
 
@@ -180,9 +194,9 @@ def test_propagate_comp_dir_discovery(offsets_dir, tmp_path, capsys):
     (comp_dir / "target" / "ibss.raw").write_bytes(_make_component(target_entries))
 
     profile_gen.cmd_propagate(
-        [str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1", "--comp-dir", str(comp_dir)])
+        [str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,5", "--comp-dir", str(comp_dir)])
 
-    prof = _load(offsets_dir / "iPhone12,1_27.0b2.yaml")
+    prof = _load(offsets_dir / "iPhone12,5_27.0b2.yaml")
     ibss = prof["patches"]["ibss"]
 
     for name, (base_off, _) in IBSS_ENTRIES.items():
@@ -200,7 +214,7 @@ def test_propagate_comp_dir_discovery(offsets_dir, tmp_path, capsys):
     assert prof["patches"]["ibec"]["keep_nonce_b"]["pending"] is True
     assert prof["patches"]["txm"]["query_module0"]["pending"] is True
 
-    passed, failed, _ = device_offsets.validate_offsets(offsets_dir / "iPhone12,1_27.0b2.yaml")
+    passed, failed, _ = device_offsets.validate_offsets(offsets_dir / "iPhone12,5_27.0b2.yaml")
     assert failed == 0
     assert passed == 2 + 1 + 1 + 5  # kernel 2 + ramdisk 1 + daemons 1 + ibss 5
 
@@ -218,9 +232,9 @@ def test_propagate_comp_dir_low_confidence_stays_pending(offsets_dir, tmp_path):
     (comp_dir / "target" / "ibss.raw").write_bytes(_make_component(entries))
 
     profile_gen.cmd_propagate(
-        [str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,1", "--comp-dir", str(comp_dir)])
+        [str(offsets_dir / "iPhone12,3_27.0b2.yaml"), "iPhone12,5", "--comp-dir", str(comp_dir)])
 
-    ibss = _load(offsets_dir / "iPhone12,1_27.0b2.yaml")["patches"]["ibss"]
+    ibss = _load(offsets_dir / "iPhone12,5_27.0b2.yaml")["patches"]["ibss"]
     assert ibss["boot_args_string"]["pending"] is True
     assert ibss["boot_args_string"]["offset"] == SENTINEL
     assert ibss["image4_validate_nop"]["pending"] is False
