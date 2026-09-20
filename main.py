@@ -321,11 +321,28 @@ def menu_configure():
 
     print(f"  {C.EYE}[f]{C.NC} Find online offset sources for a device model")
     print(f"  {C.EYE}[v]{C.NC} Validate a custom offset file")
+    print(f"  {C.EYE}[a]{C.NC} Audit a profile against an upstream make_cfw.py script")
+    print(f"  {C.EYE}[r]{C.NC} Fetch IPSW components over HTTP range (no full download)")
     print()
 
-    choice = input(prompt("Select device [#], find [f], validate [v], or [b]ack: ") or "").strip().lower()
+    choice = input(prompt("Select device [#], find [f], validate [v], audit [a], fetch [r], or [b]ack: ") or "").strip().lower()
 
-    if choice == "f":
+    if choice == "a":
+        script = input(prompt("Path to upstream make_cfw.py: ")).strip()
+        profile = input(prompt("Path to profile YAML: ")).strip()
+        if script and profile:
+            import subprocess
+            subprocess.run([sys.executable, str(PROJECT_ROOT / "source_audit.py"),
+                            "script", script, profile])
+    elif choice == "r":
+        url = input(prompt("IPSW url (Apple CDN): ")).strip()
+        model = input(prompt("Device model (e.g. iPhone12,1): ")).strip()
+        if url and model:
+            import subprocess
+            cmd = [sys.executable, str(PROJECT_ROOT / "fetch_components.py"),
+                   "--url", url, "--device", model, "--extract-payload"]
+            subprocess.run(cmd)
+    elif choice == "f":
         model = input(prompt("Enter device model (e.g. iPhone12,1): ")).strip()
         if model:
             sources = find_online_sources(model)
