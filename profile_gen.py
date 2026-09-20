@@ -12,6 +12,7 @@ Usage:
 """
 
 import copy
+import json
 import sys
 import yaml
 from pathlib import Path
@@ -436,9 +437,175 @@ def cmd_propagate(args: list[str]):
     print(f"  {C.EYE}[3]{C.NC} The profile activates only once nothing is pending.")
 
 
-def cmd_coverage():
+GAP_SECTIONS = ("ibss", "ibec", "kernel", "txm", "restoreramdisk", "daemons")
+
+
+def section_stats(profile: dict) -> dict[str, tuple[int, int]]:
+    """section -> (filled, total) counting every entry the profile defines.
+
+    A pending (sentinel) entry counts as unfilled, so the numbers describe how
+    complete each profile is on its own terms.
+    """
+    import yaml as _yaml  # noqa: F401  (kept for symmetry with loaders)
+
+    def walk(name: str, entry) -> tuple[int, int]:
+        if not isinstance(entry, dict):
+            return 0, 0
+        if "offset" in entry and "value" in entry:
+            filled = 0 if entry.get("pending") else 1
+            return filled, 1
+        filled = total = 0
+        for sub_name, sub in entry.items():
+            f, tt = walk(f"{name}.{sub_name}", sub)
+            filled += f
+            total += tt
+        return filled, total
+
+    stats: dict[str, tuple[int, int]] = {}
+    for sec, data in (profile.get("patches") or {}).items():
+        filled = total = 0
+        if isinstance(data, list):
+            for entry in data:
+                f, tt = walk(sec, entry)
+                filled += f
+                total += tt
+        elif isinstance(data, dict):
+            for name, entry in data.items():
+                f, tt = walk(name, entry)
+                filled += f
+                total += tt
+        if total:
+            stats[sec] = (filled, total)
+    return stats
+
+
+def coverage_data() -> dict:
+    """Machine-readable coverage: devices, profiles, per-section gaps."""
+    from device_offsets import pending_entries, validate_offsets
+
+    devices = []
+    for model, info in sorted(DEVICE_DB.items()):
+        files = sorted(OFFSETS_DIR.glob(f"{model}_*.yaml"))
+        profiles = []
+        for f in files:
+            passed, failed, _ = validate_offsets(f)
+            pend = pending_entries(f)
+            with open(f) as fh:
+                data = yaml.safe_load(fh) or {}
+            stats = section_stats(data)
+            status = "incomplete" if failed else ("pending" if pend else "ready")
+            profiles.append({
+                "file": f.name,
+                "tag": _tag_from_path(f),
+                "ios_version": data.get("ios_version", ""),
+                "build": data.get("build", ""),
+                "status": status,
+                "patches_ok": passed,
+                "pending": pend,
+                "kernel_component": info.get("kernel_component", ""),
+                "sections": {sec: {"filled": filled, "total": total}
+                             for sec, (filled, total) in stats.items()},
+            })
+        devices.append({
+            "model": model,
+            "name": info["name"],
+            "soc": info["soc"],
+            "board": info["board"],
+            "kernel_component": info.get("kernel_component", ""),
+            "profiles": profiles,
+        })
+    ready = sum(1 for d in devices for p in d["profiles"] if p["status"] == "ready")
+    total = sum(1 for d in devices for p in d["profiles"])
+    return {
+        "devices": devices,
+        "summary": {
+            "devices_known": len(devices),
+            "devices_with_profiles": sum(1 for d in devices if d["profiles"]),
+            "profiles": total,
+            "profiles_ready": ready,
+        },
+        "kernel_components": {m: i.get("kernel_component", "")
+                              for m, i in DEVICE_DB.items() if i.get("kernel_component")},
+    }
+
+
+def kernel_component_mismatch(profile_file: Path) -> tuple[str, str]:
+    """(own, source) kernel components when a profile's kernel was propagated
+    from a board that ships a different kernelcache binary, else ("", "")."""
+    with open(profile_file) as fh:
+        data = yaml.safe_load(fh) or {}
+    own = DEVICE_DB.get(str(data.get("model", "")), {}).get("kernel_component", "")
+    source_file = str(data.get("propagated_from", ""))
+    if not (own and source_file):
+        return "", ""
+    source_path = OFFSETS_DIR / source_file
+    if not source_path.exists():
+        return own, ""
+    with open(source_path) as fh:
+        source = yaml.safe_load(fh) or {}
+    source_comp = DEVICE_DB.get(str(source.get("model", "")), {}).get("kernel_component", "")
+    if source_comp and source_comp != own:
+        return own, source_comp
+    return "", ""
+
+
+def cmd_gaps(json_out: bool = False):
+    """Per-profile, per-section gap matrix (which parts still need offsets)."""
+    data = coverage_data()
+    flagged = []
+    for dev in data["devices"]:
+        for prof in dev["profiles"]:
+            own, source = kernel_component_mismatch(OFFSETS_DIR / prof["file"])
+            if own:
+                prof["kernel_component_mismatch"] = {"own": own, "source": source}
+                flagged.append((prof["file"], own, source))
+    if json_out:
+        print(json.dumps({"profiles": [dict(p, model=d["model"], device=d["name"])
+                                       for d in data["devices"] for p in d["profiles"]],
+                          "kernel_component_mismatches": [
+                              {"file": f, "own": o, "source": s} for f, o, s in flagged]},
+                         indent=2))
+        return
+
+    print(section("Offset Gaps by Section"))
+    print()
+    header = f"  {'Profile':<26}" + "".join(f"{s[:6]:>8}" for s in GAP_SECTIONS)
+    print(f"{C.EYE}{header}{C.NC}")
+    print(f"  {'─' * (26 + 8 * len(GAP_SECTIONS))}")
+    for dev in data["devices"]:
+        for prof in dev["profiles"]:
+            cells = []
+            for sec in GAP_SECTIONS:
+                stat = prof["sections"].get(sec)
+                if not stat:
+                    cells.append(f"{'—':>8}")
+                    continue
+                text = f"{stat['filled']}/{stat['total']}"
+                color = C.GRN if stat["filled"] == stat["total"] else C.AMB
+                cells.append(f"{color}{text:>8}{C.NC}")
+            label = f"{dev['model']} {prof['tag']}"
+            print(f"  {C.SNOW}{label:<26}{C.NC}" + "".join(cells))
+    if flagged:
+        print()
+        print(f"  {C.AMB}kernel sections copied from another board's kernelcache "
+              f"({len(flagged)} profile(s)):{C.NC}")
+        for file, own, source in flagged:
+            print(f"    {C.DIM}{file}{C.NC} {C.AMB}{source or '?'} -> needs {own}{C.NC}")
+        print(f"  {C.DIM}kernel patch offsets live in the board's own kernelcache binary; "
+              f"re-discover them from that component{C.NC}")
+    print()
+    print(f"  {C.DIM}filled/total entries per profile section · a pending entry counts as "
+          f"unfilled{C.NC}")
+    print()
+
+
+def cmd_coverage(json_out: bool = False):
     """Coverage table: every known device × profile status."""
     from device_offsets import validate_offsets, pending_entries
+
+    if json_out:
+        print(json.dumps(coverage_data(), indent=2))
+        return
 
     print(section("Offset Profile Coverage"))
     print()
@@ -476,8 +643,17 @@ def cmd_coverage():
     print(f"  {C.DIM}{n_with_profiles}/{n_devices} devices have profiles · {n_ready} ready to flash{C.NC}")
 
 
-def cmd_list_templates():
+def cmd_list_templates(json_out: bool = False):
     """List all known device models in the database."""
+    if json_out:
+        print(json.dumps({
+            "devices": [{"model": m, "name": i["name"], "soc": i["soc"],
+                         "board": i["board"], "apticket": i["apticket"],
+                         "kernel_component": i.get("kernel_component", ""),
+                         "profiles": [f.name for f in sorted(OFFSETS_DIR.glob(f"{m}_*.yaml"))]}
+                        for m, i in sorted(DEVICE_DB.items())],
+        }, indent=2))
+        return
     print(section("Device Database"))
     print()
     for model, info in sorted(DEVICE_DB.items()):
@@ -496,8 +672,9 @@ if __name__ == "__main__":
         print(f"    {C.EYE}propagate{C.NC} <base.yaml> <Model> [--ios V] [--build B] [--comp-dir DIR] [--overwrite] [--force]")
         print(f"    {C.EYE}diff{C.NC}      <base.yaml> <updated.yaml>")
         print(f"    {C.EYE}migrate{C.NC}   <base.yaml> <target.yaml|iOS> [--comp-dir DIR] [--auto] [--report FILE]")
-        print(f"    {C.EYE}coverage{C.NC}  Show per-device profile status")
-        print(f"    {C.EYE}list{C.NC}      Show all known devices")
+        print(f"    {C.EYE}coverage{C.NC}  Show per-device profile status [--json]")
+        print(f"    {C.EYE}gaps{C.NC}      Per-profile, per-section gap matrix [--json]")
+        print(f"    {C.EYE}list{C.NC}      Show all known devices [--json]")
         print()
         sys.exit(0)
 
@@ -514,9 +691,11 @@ if __name__ == "__main__":
         from migrate import cli_main
         cli_main(args)
     elif cmd == "coverage":
-        cmd_coverage()
+        cmd_coverage(json_out="--json" in args)
+    elif cmd == "gaps":
+        cmd_gaps(json_out="--json" in args)
     elif cmd == "list":
-        cmd_list_templates()
+        cmd_list_templates(json_out="--json" in args)
     else:
         print(err(f"Unknown command: {cmd}"))
         sys.exit(1)

@@ -330,10 +330,14 @@ if __name__ == "__main__":
         sys.exit(0)
 
     cmd = sys.argv[1]
+    as_json = "--json" in sys.argv
 
     if cmd == "list":
         files = list_offset_files()
-        if not files:
+        if as_json:
+            import json as _json
+            print(_json.dumps({"profiles": files}, indent=2))
+        elif not files:
             print(info("No offset files found"))
         else:
             print(section("Offset Files"))
@@ -350,7 +354,11 @@ if __name__ == "__main__":
             print(err(f"File not found: {target}"))
             sys.exit(1)
         passed, failed, errors = validate_offsets(target)
-        if failed == 0:
+        if as_json:
+            import json as _json
+            print(_json.dumps({"file": str(target), "passed": passed, "failed": failed,
+                               "errors": errors, "pending": pending_entries(target)}, indent=2))
+        elif failed == 0:
             print(ok(f"All {passed} patches valid"))
         else:
             print(err(f"{passed} passed, {failed} failed:"))
