@@ -27,7 +27,11 @@ Notes:
 
 import argparse
 import hashlib
+import json
+import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import kczip
@@ -49,6 +53,71 @@ COMPONENT_PATTERNS = {
 }
 ALL_COMPONENTS = tuple(COMPONENT_PATTERNS)
 DEFAULT_COMPONENTS = ("ibss", "ibec", "txm")
+
+
+IPSW_ME_API = "https://api.ipsw.me/v4/device/%s?type=ipsw"
+IPSW_DEV_PAGE = "https://ipsw.dev/download/%s/%s"
+URL_CACHE = ROOT / "research" / "ipsw_urls.json"
+_CDN_RE = re.compile(r"https://updates\.cdn-apple\.com[^\"'<> ]*?\.ipsw")
+
+
+def _url_cache() -> dict:
+    try:
+        return json.loads(URL_CACHE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _cache_url(device: str, build: str, url: str, version: str) -> None:
+    cache = _url_cache()
+    cache[f"{device}/{build}"] = {"url": url, "version": version}
+    try:
+        URL_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        URL_CACHE.write_text(json.dumps(cache, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def resolve_ipsw_url(device: str, build: str, use_cache: bool = True) -> tuple[str, str]:
+    """Find the Apple CDN url for a device+build. Returns (url, version).
+
+    Sources, in order: local cache, the ipsw.me API (public releases), the
+    ipsw.dev download page (betas, which ipsw.me does not index).
+    """
+    if not device or not build:
+        return "", ""
+    key = f"{device}/{build}"
+    if use_cache:
+        hit = _url_cache().get(key)
+        if hit and hit.get("url"):
+            return hit["url"], hit.get("version", "")
+
+    try:
+        with urllib.request.urlopen(IPSW_ME_API % device, timeout=30) as r:
+            data = json.loads(r.read().decode())
+        for fw in data.get("firmwares", []):
+            if str(fw.get("buildid", "")).lower() == build.lower():
+                _cache_url(device, build, fw["url"], fw.get("version", ""))
+                return fw["url"], fw.get("version", "")
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        pass
+
+    try:
+        req = urllib.request.Request(IPSW_DEV_PAGE % (device, build),
+                                     headers={"User-Agent": "usbliter8-arctic/fetch_components"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            html = r.read().decode("utf-8", "replace").replace("\\/", "/")
+        hits = _CDN_RE.findall(html)
+        if hits:
+            version = ""
+            m = re.search(r"_(\d+\.\d+)_" + re.escape(build), hits[0])
+            if m:
+                version = m.group(1)
+            _cache_url(device, build, hits[0], version)
+            return hits[0], version
+    except (urllib.error.URLError, TimeoutError):
+        pass
+    return "", ""
 
 
 def _short_board(board: str) -> str:
@@ -183,7 +252,8 @@ def _pyimg4_extract(path: Path) -> bool:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="fetch_components.py", add_help=True,
                                 description="Fetch IPSW components over HTTP Range")
-    p.add_argument("--url", required=True, help="IPSW url (Apple CDN)")
+    p.add_argument("--url", default="",
+                   help="IPSW url (Apple CDN); omit to resolve it from --device/--build")
     p.add_argument("--device", required=True, help="device model, e.g. iPhone12,3")
     p.add_argument("--ios", default="", help="iOS version tag, e.g. 27.0 (naming only)")
     p.add_argument("--build", default="", help="build id, e.g. 24A437 (naming only)")
@@ -206,17 +276,31 @@ def main(argv: list[str] | None = None) -> int:
         print(err(f"unknown component(s): {', '.join(bad)}"))
         return 2
 
+    url = args.url
+    if not url:
+        if not args.build:
+            print(err("pass --url, or --device plus --build to resolve the url automatically"))
+            return 2
+        print(info(f"resolving IPSW url for {args.device} {args.build}..."))
+        url, version = resolve_ipsw_url(args.device, args.build)
+        if not url:
+            print(err(f"no IPSW url found for {args.device} {args.build} — pass --url explicitly"))
+            return 2
+        if version and not args.ios:
+            args.ios = version
+        print(ok(f"found {url}"))
+
     print(section("Ranged IPSW fetch"))
-    print(f"  {C.DIM}{args.url}{C.NC}")
+    print(f"  {C.DIM}{url}{C.NC}")
     print()
 
     if args.list:
-        return cmd_list(args.url, args.device, comps, args.kernel_name)
+        return cmd_list(url, args.device, comps, args.kernel_name)
 
     out_dir = Path(args.out) if args.out else (
         DEFAULT_OUT_ROOT / f"{args.device.replace(',', '')}_{args.ios or 'ios'}_{args.build or 'build'}")
     print(info(f"output: {out_dir}"))
-    return cmd_fetch(args.url, args.device, out_dir, comps,
+    return cmd_fetch(url, args.device, out_dir, comps,
                      args.kernel_name, args.extract_payload)
 
 

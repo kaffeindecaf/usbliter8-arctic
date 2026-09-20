@@ -2,7 +2,7 @@
 
 > The easy way to run the usbliter8 tethered jailbreak. A TUI hub that walks you through the whole chain: wire up an RP2350 board, flash the exploit firmware, build a custom firmware for your A12/A13 iPhone or iPad, restore it, and boot. Offsets are managed as validated YAML profiles, and a fingerprint engine migrates them between iOS betas automatically.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-69%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-99%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 ## Quick start
 
@@ -182,9 +182,19 @@ python3 profile_gen.py propagate offsets/iPhone12,3_27.0b2.yaml iPhone12,1 \
     --comp-dir extracted/ --force                     # + auto-discover iBSS/iBEC/TXM via fingerprinting
 python3 profile_gen.py coverage                       # per-device profile status table
 
-# Pull just the components you need out of an IPSW over HTTP range (no 6 GB download)
-python3 fetch_components.py --url <ipsw-url> --device iPhone12,3 --ios 27.0b3 --build 24A5380h
-python3 fetch_components.py --url <ipsw-url> --device iPhone12,1 --list
+# Pull just the components you need out of an IPSW over HTTP range (no 6 GB download).
+# Without --url the IPSW url is resolved for you (ipsw.me for releases, ipsw.dev for betas)
+python3 fetch_components.py --device iPhone12,3 --ios 27.0b3 --build 24A5380h --extract-payload
+python3 fetch_components.py --device iPhone12,1 --build 24A437 --list
+
+# Verify a profile against the real component bytes BEFORE building (exit 2 = blocked)
+python3 preflight.py offsets/iPhone12,1_27.0.yaml
+python3 preflight.py offsets/iPhone12,1_27.0.yaml --fetch --record
+python3 preflight.py offsets/iPhone12,3_27.0b3.yaml --components research/extracted/iPhone123_27.0b3_24A5380h --json
+
+# Which sections still need offsets, and which kernel sections came from the wrong board
+python3 profile_gen.py gaps
+python3 profile_gen.py coverage --json
 
 # Audit a profile against the upstream script it came from (byte by byte)
 python3 source_audit.py script <usbliter8-fun>/work-27.0b3/make_cfw.py offsets/iPhone12,3_27.0b3.yaml
@@ -219,6 +229,12 @@ Profiles are only as good as the artefact they came from, so the repo can now re
 - **`source_audit.py`** parses an upstream `make_cfw.py` (wh1te4ever / 34306) or a Liter8 fixture set and diffs it against a profile byte by byte: `COVERED`, `PARTIAL` (profile writes less than upstream), `MISMATCH`, `REVIEW` (PC-relative sites such as adrp/add redirects, not comparable across builds), `MISSING`, `PROFILE-ONLY`. Reports land in `research/work/`.
 - **`liter8_import.py`** maps Liter8's reviewed fixture oracles onto our entry names, refuses anything whose payload is not our canonical patch, marks everything else `pending`, and (with `--verify-components`) re-checks every mapped site against the real binary before writing.
 
+- **`preflight.py`** is the gate plain usbliter8 does not have: it loads the real firmware components (auto-discovered in `research/extracted/`, read out of a local IPSW, or range-fetched, with the IPSW url resolved for you) and classifies every profile entry against the actual bytes. `--record` writes what it verified to `offsets/evidence/<profile>.json`, so the profile becomes self-verifying: later runs re-check the recorded bytes and block when they are gone (wrong board, wrong build, already-patched image). `cfw_builder` runs the gate before patching and refuses to build on a blocked profile unless you pass `--force`.
+
+Classification: `match` (recorded original bytes present) · `plausible` (site decodes as a real instruction, no recording yet) · `already-patched` · `changed` (recorded bytes absent: profile does not belong to this component) · `implausible` · `out-of-range` · `skipped` (no raw component: encrypted kernelcache/ramdisk, rootfs daemons). Exit codes: 0 ok/review, 2 blocked, so CI or a script can gate a restore. Kernelcaches stay `skipped` until you decrypt them with the wiki IV+key; everything else verifies today.
+
+`profile_gen.py gaps` shows the same picture per section, and flags the profiles whose kernel offsets were propagated from a board with a different kernelcache component.
+
 The 2026-09-20 audit of the iPhone 11 Pro profiles against the upstream scripts and the real b2/b3 components changed five things:
 
 | Entry | Was | Is | Why |
@@ -231,7 +247,7 @@ The 2026-09-20 audit of the iPhone 11 Pro profiles against the upstream scripts 
 
 `kernel.Kernel identity string 1/2` (the `/RELEASE_ARM64_T8030` to `/PATCHED_ARM64_T8030` rename both upstream projects perform) was missing entirely and is now part of the kernel section, and `cfw_builder.py` writes ASCII payloads (string patches) as well as hex.
 
-Tests: `python3 -m pytest tests/ -q` (69 tests; offset ground truth = b2 → b3 oracle in `OffsetMigrationChecklist.md`).
+Tests: `python3 -m pytest tests/ -q` (99 tests; offset ground truth = b2 → b3 oracle in `OffsetMigrationChecklist.md`).
 
 ## Contributing offsets
 
@@ -274,12 +290,14 @@ usbliter8-arctic/
 ├── fingerprint.py        # AArch64 pattern fingerprint engine
 ├── source_audit.py       # upstream script / fixture vs profile diff
 ├── liter8_import.py      # Liter8 fixture oracle importer
-├── fetch_components.py   # ranged IPSW component fetcher
+├── fetch_components.py   # ranged IPSW component fetcher + IPSW url resolution
+├── preflight.py          # verify a profile against the real component bytes
 ├── kczip.py              # zip64 range reader (ported from W0lfSword)
 ├── hardware_guide.py     # guided setup, health check, firmware flashing
 ├── deps.py               # dependency checker & installer
 ├── log_utils.py · colors.py
-├── offsets/              # device offset profiles (template, sources, iPhone12,3_*)
+├── offsets/              # device offset profiles (+ template, sources, canonical.yaml)
+│   └── evidence/         # preflight-recorded original bytes per profile (self-verifying)
 ├── tools/                # binary utilities (img4, img4tool, usbliter8ctl, …)
 └── firmware/             # downloaded UF2 firmware files
 ```

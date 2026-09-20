@@ -204,7 +204,11 @@ cmd_offsets() {
     esac
 }
 
-cmd_coverage() { py_profile coverage; }
+cmd_coverage() { py_profile coverage "$@"; }
+cmd_gaps()     { py_profile gaps "$@"; }
+cmd_preflight(){ $PY preflight.py "$@"; }
+cmd_audit()    { $PY source_audit.py "$@"; }
+cmd_fetch()    { $PY fetch_components.py "$@"; }
 cmd_migrate()  { py_profile migrate "${@}"; }
 cmd_propagate(){ py_profile propagate "${@}"; }
 cmd_explain()  { py_explain; }
@@ -311,6 +315,10 @@ cmd_help() {
     echo -e "  ${C_EYE}deps${NC}           install dependencies (pyusb, pyyaml, libusb)"
     echo -e "  ${C_EYE}offsets${NC}        list / validate / find / activate offset profiles"
     echo -e "  ${C_EYE}coverage${NC}       per-device profile status table"
+    echo -e "  ${C_EYE}gaps${NC}           which profile sections still need offsets"
+    echo -e "  ${C_EYE}preflight${NC}      verify a profile against the real component bytes"
+    echo -e "  ${C_EYE}fetch${NC}          range-fetch IPSW components (no 6GB download)"
+    echo -e "  ${C_EYE}audit${NC}          diff a profile against an upstream make_cfw.py"
     echo -e "  ${C_EYE}migrate${NC}        beta-to-beta offset migration"
     echo -e "  ${C_EYE}propagate${NC}      same-SoC profile propagation"
     echo -e "  ${C_EYE}contribute${NC}     add new offsets + prepare a pull request"
@@ -421,7 +429,11 @@ main() {
         health|doctor)         cmd_health ;;
         deps|deps-install)     cmd_deps ;;
         offsets)               cmd_offsets "${args[@]}" ;;
-        coverage)              cmd_coverage ;;
+        coverage)              cmd_coverage "${args[@]}" ;;
+        gaps)                  cmd_gaps "${args[@]}" ;;
+        preflight|verify)      cmd_preflight "${args[@]}" ;;
+        audit)                 cmd_audit "${args[@]}" ;;
+        fetch|components)      cmd_fetch "${args[@]}" ;;
         migrate)               cmd_migrate "${args[@]}" ;;
         propagate)             cmd_propagate "${args[@]}" ;;
         contribute|contrib)    cmd_contribute "${args[@]}" ;;

@@ -323,11 +323,25 @@ def menu_configure():
     print(f"  {C.EYE}[v]{C.NC} Validate a custom offset file")
     print(f"  {C.EYE}[a]{C.NC} Audit a profile against an upstream make_cfw.py script")
     print(f"  {C.EYE}[r]{C.NC} Fetch IPSW components over HTTP range (no full download)")
+    print(f"  {C.EYE}[p]{C.NC} Preflight: verify a profile against the real components")
+    print(f"  {C.EYE}[g]{C.NC} Gap matrix: which sections still need offsets")
     print()
 
-    choice = input(prompt("Select device [#], find [f], validate [v], audit [a], fetch [r], or [b]ack: ") or "").strip().lower()
+    choice = input(prompt("Select device [#], find [f], validate [v], audit [a], fetch [r], "
+                          "preflight [p], gaps [g], or [b]ack: ") or "").strip().lower()
 
-    if choice == "a":
+    if choice == "p":
+        path = input(prompt("Profile YAML (blank = active device): ")).strip()
+        argv = [path] if path else []
+        record = input(prompt("Record verified bytes as evidence? [y/N]: ")).strip().lower()
+        if record in ("y", "yes"):
+            argv.append("--record")
+        import preflight
+        preflight.main(argv or None)
+    elif choice == "g":
+        import profile_gen
+        profile_gen.cmd_gaps()
+    elif choice == "a":
         script = input(prompt("Path to upstream make_cfw.py: ")).strip()
         profile = input(prompt("Path to profile YAML: ")).strip()
         if script and profile:
@@ -376,6 +390,31 @@ def menu_configure():
             offset_path = OFFSETS_DIR / f["file"]
             if set_active_device(offset_path):
                 pass
+
+
+def _run_build_gate(offset_path) -> bool:
+    """Verify the profile before a build; ask before overriding a block."""
+    from device_offsets import pending_entries, validate_offsets
+    import preflight
+    report = preflight.run_preflight(offset_path)
+    if report.verdict == "ok":
+        print(ok(f"preflight: {report.count('match', 'plausible')} sites verified"))
+        return True
+
+    print()
+    preflight.print_report(report, verbose=False)
+    if report.verdict == "blocked":
+        ans = input(prompt("preflight BLOCKED this build — build anyway? [y/N]: ") or "n")
+        if ans.lower() not in ("y", "yes"):
+            return False
+        import cfw_builder
+        cfw_builder.FORCE = True
+        return True
+    if pending_entries(offset_path) > 0:
+        ans = input(prompt("profile has pending offsets — build anyway? [y/N]: ") or "n")
+        return ans.lower() in ("y", "yes")
+    _ = validate_offsets
+    return True
 
 
 def menu_build():

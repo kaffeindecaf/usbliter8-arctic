@@ -130,6 +130,30 @@ import a build nobody here has touched.**
 
 ---
 
+## Day 4 — Preflight verification + evidence ledger (2026-09-20)
+
+**Goal: never flash a profile that has not been checked against the real
+firmware bytes.** Plain usbliter8 trusts hardcoded offsets; this repo now
+verifies them before the build.
+
+### Tools
+- [x] **4.1** `preflight.py`: loads the real components (auto-discovered `research/extracted/<Model>_<ios>_<build>/`, a local IPSW, or a range fetch with automatic IPSW url resolution via ipsw.me/ipsw.dev) and classifies every entry: `match` / `plausible` / `already-patched` / `changed` / `implausible` / `out-of-range` / `skipped`; verdict ok|review|blocked; exit 0 or 2
+- [x] **4.2** `--record` writes `offsets/evidence/<profile>.json` (component sha256 + original bytes + timestamp) so a profile becomes self-verifying: later runs re-check the recorded bytes and block when a different board/build is supplied
+- [x] **4.3** offset-space structure checks without any component: duplicate offsets, overlapping entries, out-of-range sites; provenance.txt device check
+- [x] **4.4** string/identity entries are treated as data (empty slot = plausible) and `pending: true` entries are skipped, never failed
+- [x] **4.5** `cfw_builder._profile_gate`: validation + pending check + preflight before patching; `--force` is the only override, and the TUI asks before using it
+- [x] **4.6** `profile_gen.py gaps` + `coverage --json` + `device_offsets list/validate --json`; gaps flags profiles whose kernel offsets came from another board's kernelcache
+- [x] **4.7** canonical DB: `UL8_OFFSETS_YAML` > user dotfiles > in-repo `offsets/canonical.yaml` (corrected b3 txm values), so the cross-check works on a fresh clone and in CI
+- [x] **4.8** confidence floor is enforced in code (`apply_offsets(min_confidence)`) with an explicit `migrate --force-low`; report starts with a `VERDICT:` line
+- ✅ Verify: 99 pytest (30 new in `tests/test_preflight.py` + `tests/test_tooling.py`), `preflight.py` blocked a real wrong-component run (iPhone12,1 profile vs iPhone12,3 b3 components: 0 verified, 16 bad), evidence recorded for iPhone12,1 27.0 and iPhone12,3 b2/b3
+
+### Still open
+- [ ] **4.9** kernelcache verification needs the wiki IV+key: fetch the decrypted `kernelcache.raw` and preflight will verify the kernel section the same way
+- [ ] **4.10** `--json` for `migrate` itself (coverage/gaps/list/preflight are done)
+- [ ] **4.11** the 8 A13 sibling profiles whose kernel sections were propagated from `iphone12` (iPhone12,1/12,8, iPad12,1/12,2 b2+b3) should be re-discovered from their own kernelcache component; `profile_gen.py gaps` lists them
+
+---
+
 ## Hard rules (never break)
 
 - Wrong offset rated HIGH = brick risk → double-gate: uniqueness + disasm-class match
