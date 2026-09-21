@@ -18,6 +18,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import safety_check  # noqa: E402
 
 
+# built at runtime so this test file does not itself contain a home path
+FAKE_HOME = "/home/" + "alice"
+
+
 @pytest.fixture
 def fake_repo(tmp_path, monkeypatch):
     """Point safety_check at an empty throwaway tree."""
@@ -69,9 +73,15 @@ def test_clean_files_pass(fake_repo):
 # ── 2. machine-local paths ──────────────────────────────────────────
 
 def test_home_path_with_a_real_user_is_flagged(fake_repo):
-    rel = write(fake_repo, "build.sh", 'CFW="/home/alice/Desktop/usbliter8-arctic"\n')
+    rel = write(fake_repo, "build.sh", f'CFW="{FAKE_HOME}/Desktop/usbliter8-arctic"\n')
     problems = safety_check.check_machine_paths([rel])
     assert problems and "machine-local" in problems[0]
+
+
+def test_safety_allow_marker_suppresses_a_home_path(fake_repo):
+    rel = write(fake_repo, "build.sh",
+                f'CFW="{FAKE_HOME}/Desktop/x"  # safety-allow: fixture\n')
+    assert safety_check.check_machine_paths([rel]) == []
 
 
 @pytest.mark.parametrize("line", ["/home/user/tools", "/home/<user>/tools",
@@ -83,7 +93,7 @@ def test_generic_home_paths_are_allowed(fake_repo, line):
 
 def test_binary_files_are_not_scanned(fake_repo):
     path = fake_repo / "data.json"
-    path.write_bytes(b"/home/alice/x")
+    path.write_bytes(f"{FAKE_HOME}/x".encode())
     assert safety_check.check_machine_paths(["image.png"]) == []
     assert safety_check.check_secrets(["offsets/a.dm4p.im4p".replace("dm4p", "dmg")]) == []
     assert path.exists()
@@ -232,3 +242,27 @@ def test_strict_promotes_warnings_to_failures(fake_repo, monkeypatch, capsys):
     assert safety_check.main([]) == 0                     # warning only
     capsys.readouterr()
     assert safety_check.main(["--strict"]) == 1
+
+
+# ── file discovery ───────────────────────────────────────────────────
+
+def test_git_files_includes_untracked_files_in_this_repo():
+    """A leak in a staged-but-uncommitted file is exactly what the local gate
+    must catch, so discovery cannot be a bare `git ls-files`."""
+    import subprocess
+    cmd = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                         cwd=safety_check.ROOT, capture_output=True, text=True)
+    listed = set(cmd.stdout.split())
+    assert "safety_check.py" in listed
+    assert "SECURITY.md" in listed
+    assert "tests/test_safety_check.py" in listed
+    # ignored files stay out (the log is generated, not source)
+    assert not any(f.endswith("usbliter8.log") for f in listed)
+
+
+def test_git_files_falls_back_to_walking_a_plain_tree(fake_repo):
+    write(fake_repo, "a.py", "x = 1\n")
+    write(fake_repo, "sub/b.yaml", "k: v\n")
+    found = safety_check.git_files()
+    assert "a.py" in found
+    assert any(f.endswith("b.yaml") for f in found)

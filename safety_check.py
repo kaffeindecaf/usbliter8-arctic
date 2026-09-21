@@ -68,9 +68,15 @@ BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".im4p", ".dmg", ".z
 
 
 def git_files() -> list[str]:
+    """Tracked files plus untracked-but-not-ignored ones.
+
+    Including untracked files matters locally: a leak in a file that is staged
+    but not yet committed is exactly what this check exists to stop, and a bare
+    `git ls-files` would not see it (CI would, one push later).
+    """
     try:
-        out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True,
-                             text=True, timeout=60, check=True)
+        out = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                             cwd=ROOT, capture_output=True, text=True, timeout=60, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())
     return [line for line in out.stdout.splitlines() if line.strip()]
