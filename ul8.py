@@ -9,8 +9,18 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 
+def _argv_after(verb: str) -> list[str]:
+    """Raw argv after a subcommand verb, so its own options pass through intact."""
+    argv = sys.argv[1:]
+    if verb in argv:
+        return argv[argv.index(verb) + 1:]
+    return []
+
 if __name__ == "__main__":
     import argparse
+
+    import log_utils
+    log_utils.install()          # usbliter8.log + unhandled-exception logging
 
     p = argparse.ArgumentParser(
         prog="ul8",
@@ -21,9 +31,13 @@ if __name__ == "__main__":
         "command",
         nargs="?",
         default="menu",
-        help="Subcommand: menu, pwn, offsets, explain, health, deps",
+        help="Subcommand: menu, pwn, offsets, preflight, gaps, explain, health, deps, "
+             "logs, version",
     )
-    args = p.parse_args()
+    p.add_argument("profile", nargs="?", default="", help="profile for preflight")
+    # parse_known_args: flags meant for the wrapped tool (--json, --fetch, --record)
+    # must pass through instead of being rejected by this parser.
+    args, extra = p.parse_known_args()
 
     if args.dry_run:
         import cfw_builder
@@ -37,6 +51,13 @@ if __name__ == "__main__":
     elif args.command == "pwn":
         import pwn_utils
         pwn_utils.print_device_status()
+    elif args.command == "preflight":
+        import preflight
+        argv = ([args.profile] if args.profile else []) + extra
+        sys.exit(preflight.main(argv or None))
+    elif args.command == "gaps":
+        import profile_gen
+        profile_gen.cmd_gaps(json_out="--json" in extra)
     elif args.command == "offsets":
         import device_offsets
         for f in device_offsets.list_offset_files():
@@ -54,6 +75,8 @@ if __name__ == "__main__":
     elif args.command == "deps":
         from deps import install_dependencies
         install_dependencies()
+    elif args.command == "logs":
+        sys.exit(log_utils.main(_argv_after("logs") or None))
     else:
         import main
         main.menu()
