@@ -629,6 +629,9 @@ def print_report(report: Report, *, verbose: bool = True) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import deps
+    deps.ensure(("profiles", "build"))          # offer to install what is missing
+
     p = argparse.ArgumentParser(prog="preflight.py", description=__doc__.splitlines()[0])
     p.add_argument("profile", help="offset profile YAML")
     p.add_argument("--components", default="", help="directory of raw components")

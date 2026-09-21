@@ -39,7 +39,8 @@ B='\033[1m'
 # USB access needs root on Linux (libusb). macOS/Windows do not.
 # Read-only commands (help, version, offsets list, coverage,
 # contribute status/pr, explain) skip the warning.
-ROOT_NEEDED_COMMANDS="guided setup hw flash pwn health doctor deps deps-install"
+# deps is deliberately absent: a dependency check must work as a normal user
+ROOT_NEEDED_COMMANDS="guided setup hw flash pwn health doctor"
 FIRST_ARG="${1:-menu}"
 if [ "$(uname -s)" = "Linux" ] && [ "$EUID" -ne 0 ]; then
     case " $ROOT_NEEDED_COMMANDS " in
@@ -312,7 +313,7 @@ cmd_help() {
     echo -e "  ${C_EYE}postboot${NC}       post-boot setup (USB net, VNC, SSH)"
     echo -e "  ${C_EYE}pwn${NC}            check / wait for PWN DFU"
     echo -e "  ${C_EYE}health${NC}         health check (board, tools, firmware, USB)"
-    echo -e "  ${C_EYE}deps${NC}           install dependencies (pyusb, pyyaml, libusb)"
+    echo -e "  ${C_EYE}deps${NC}           check dependencies and offer to install what is missing"
     echo -e "  ${C_EYE}offsets${NC}        list / validate / find / activate offset profiles"
     echo -e "  ${C_EYE}coverage${NC}       per-device profile status table"
     echo -e "  ${C_EYE}gaps${NC}           which profile sections still need offsets"
