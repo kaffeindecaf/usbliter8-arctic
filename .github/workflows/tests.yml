@@ -41,8 +41,8 @@ jobs:
       - name: lint for bug patterns (undefined names, shadowed imports, dead locals)
         run: |
           python -m pip install --quiet ruff
-          ruff check --select F,E9,B006,B008,B012,B013,E7,RUF013 --ignore F541,E731 \
-               --line-length 120 .
+          ruff check --select F,E9,B006,B008,B012,B013,E7,RUF013,F402,F811 \
+               --ignore F541,E731 --line-length 120 .
 
       - name: offset profiles validate
         run: |
