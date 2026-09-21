@@ -649,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
     profile_path = Path(args.profile)
     if not profile_path.exists():
         print(err(f"profile not found: {profile_path}"))
-        return 2
+        return log_utils.EXIT_ERROR
 
     report = run_preflight(
         profile_path,
@@ -668,7 +668,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(ok(f"evidence recorded: {path}"))
 
     if report.verdict == "blocked":
-        return 2
+        return log_utils.EXIT_BLOCKED
 
     gave_a_source = bool(args.components or args.ipsw or args.url or args.fetch)
     if gave_a_source and not report.components:
