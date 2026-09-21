@@ -30,7 +30,7 @@ jobs:
           python-version: "3.13"
 
       - name: install test dependencies
-        run: python -m pip install --upgrade pip pytest pyyaml capstone
+        run: python -m pip install --upgrade pip pytest pyyaml capstone pyimg4
 
       - name: every module parses
         run: python -m compileall -q .
@@ -62,7 +62,7 @@ jobs:
           python-version: "3.9"
 
       - name: install test dependencies
-        run: python -m pip install --upgrade pip pytest pyyaml capstone
+        run: python -m pip install --upgrade pip pytest pyyaml capstone pyimg4
 
       - name: tests
         run: python -m pytest tests/ -q
