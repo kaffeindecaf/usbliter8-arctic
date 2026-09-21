@@ -74,7 +74,6 @@ def test_long_der_lengths_round_trip(no_pyimg4):
 
 
 def test_bzip2_payload_is_decompressed_with_stdlib(no_pyimg4):
-    import struct
     compressed = bz2.compress(PAYLOAD)
     container = img4wrap.wrap(compressed, "ibss", "")
     result = img4wrap.unwrap(container)
