@@ -12,10 +12,11 @@ from urllib.request import urlretrieve, URLError
 
 import yaml
 
-from colors import C, ok, err, warn, info, section, key_value, header, divider, prompt
+import toolchain
+from colors import C, ok, err, warn, info, section, key_value, header, prompt
+import log_utils
 from log_utils import log_info, log_warn, log_error, log_step
 
-TOOLS_DIR = Path(__file__).parent / "tools"
 FW_DIR = Path(__file__).parent / "firmware"
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -235,11 +236,12 @@ class QuitSetup(Exception):
     """Raised when the user asks to exit the guided setup."""
 
 
-def _ask(prompt_text: str, default: str = "", valid: tuple = None, retries: int = 3) -> str:
+def _ask(prompt_text: str, default: str = "", valid: tuple | None = None,
+         retries: int = 3) -> str:
     """Input with validation and retries. 'quit' or Ctrl-C exits the setup."""
     for attempt in range(retries):
         try:
-            ans = input(prompt(prompt_text) or default).strip().lower()
+            ans = log_utils.safe_input(prompt(prompt_text) or default).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             raise QuitSetup
@@ -444,7 +446,7 @@ def _guided_setup_impl():
     show_troubleshooting()
 
     try:
-        input(prompt("Press Enter to return to menu..."))
+        log_utils.safe_input(prompt("Press Enter to return to menu..."))
     except (EOFError, KeyboardInterrupt):
         print()
 
@@ -476,19 +478,37 @@ def run_health_check() -> dict[str, bool]:
     results["firmware_present"] = fw_ok
 
     # 3. Tools
-    from log_utils import check_command
     required = ["usbliter8ctl"]
-    tools = {t: (TOOLS_DIR / t).exists() or check_command(t) for t in required}
+    # a bundled macOS binary "exists" on Linux but cannot run: ask toolchain
+    tools = {t: toolchain.tool_available(t) for t in required}
     for t, ok_val in tools.items():
         color = C.GRN if ok_val else C.RED
         print(key_value(f"Tool: {t}", f"{color}{'found' if ok_val else 'NOT FOUND'}{C.NC}"))
     results["tools_ready"] = all(tools.values())
 
     # 4. RP2350
-    from pwn_utils import check_pyusb_installed, detect_rp2350
+    from pwn_utils import USB_HELP, check_pyusb_installed, detect_rp2350, usb_status
     pyusb_ok = check_pyusb_installed()
     print(key_value("pyusb", f"{C.GRN}installed{C.NC}" if pyusb_ok else f"{C.AMB}not installed{C.NC}"))
     results["pyusb_available"] = pyusb_ok
+
+    status = usb_status()
+    if status["ready"]:
+        print(key_value("usb backend", f"{C.GRN}{status['backend']}{C.NC}"))
+    else:
+        print(key_value("usb backend", f"{C.RED}unavailable{C.NC}"))
+        for line in (status["problem"] or USB_HELP).splitlines():
+            print(f"    {C.DIM}{line}{C.NC}")
+    results["usb_backend_ready"] = status["ready"]
+
+    try:
+        import img4wrap
+        decoder_ok, decoder_note = img4wrap.decoder_available()
+        print(key_value("IMG4 codec", f"{C.GRN}{decoder_note}{C.NC}" if decoder_ok
+                        else f"{C.AMB}{decoder_note}{C.NC}"))
+        results["img4_decoder"] = decoder_ok
+    except Exception:                                          # noqa: BLE001
+        results["img4_decoder"] = False
 
     if pyusb_ok:
         rp = detect_rp2350()
@@ -502,8 +522,8 @@ def run_health_check() -> dict[str, bool]:
         results["rp2350_detected"] = False
 
     # 5. Tools directory check
-    tools_ok = TOOLS_DIR.exists() and list(TOOLS_DIR.glob("*"))
-    print(key_value("Tool dir", f"{C.GRN}ready ({len(list(TOOLS_DIR.glob('*')))}){C.NC}" if tools_ok else f"{C.RED}empty/missing{C.NC}"))
+    tools_ok = toolchain.TOOLS_DIR.exists() and list(toolchain.TOOLS_DIR.glob("*"))
+    print(key_value("Tool dir", f"{C.GRN}ready ({len(list(toolchain.TOOLS_DIR.glob('*')))}){C.NC}" if tools_ok else f"{C.RED}empty/missing{C.NC}"))
     results["tool_dir_ready"] = tools_ok
 
     # Summary
@@ -519,36 +539,8 @@ def run_health_check() -> dict[str, bool]:
     return results
 
 
-def verify_board_for_exploit() -> bool:
-    """Pre-flash verification checklist. Returns True if ready."""
-    print(header("Pre-Flash Verification"))
-    print()
-
-    checks = [
-        ("Board configured", _load_config().get("selected_board") is not None),
-        ("Firmware downloaded", any(
-            check_firmware(bid) for bid in UF2_FILES
-        )),
-        ("usbliter8ctl available", (TOOLS_DIR / "usbliter8ctl").exists()),
-        ("RP2350 tools present", TOOLS_DIR.exists() and list(TOOLS_DIR.glob("*"))),
-    ]
-
-    all_pass = True
-    for name, result in checks:
-        if result:
-            print(ok(name))
-        else:
-            print(err(name))
-            all_pass = False
-
-    print()
-    if all_pass:
-        print(ok("Verification passed — ready to proceed"))
-    else:
-        print(err("Some checks failed — resolve before flashing"))
-
-    return all_pass
-
 
 if __name__ == "__main__":
-    interactive_hardware_setup()
+    import log_utils
+    log_utils.install()
+    sys.exit(log_utils.guard(interactive_hardware_setup))

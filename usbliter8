@@ -39,7 +39,8 @@ B='\033[1m'
 # USB access needs root on Linux (libusb). macOS/Windows do not.
 # Read-only commands (help, version, offsets list, coverage,
 # contribute status/pr, explain) skip the warning.
-ROOT_NEEDED_COMMANDS="guided setup hw flash pwn health doctor deps deps-install"
+# deps is deliberately absent: a dependency check must work as a normal user
+ROOT_NEEDED_COMMANDS="guided setup hw flash pwn health doctor"
 FIRST_ARG="${1:-menu}"
 if [ "$(uname -s)" = "Linux" ] && [ "$EUID" -ne 0 ]; then
     case " $ROOT_NEEDED_COMMANDS " in
@@ -58,10 +59,15 @@ SESSION_LOG="$DATA_DIR/session.log"
 log_script() { echo "[$(date '+%H:%M:%S')] $*" >> "$SESSION_LOG"; }
 
 cleanup() {
-    tput cnorm 2>/dev/null || true
-    stty echo 2>/dev/null || true
-    echo -e "\033[?25h"
-    log_script "session ended (exit=$?)"
+    local rc=$?
+    # never write escape codes into piped output: --json must stay parseable
+    if [ -t 1 ]; then
+        tput cnorm 2>/dev/null || true
+        stty echo 2>/dev/null || true
+        echo -e "\033[?25h"
+    fi
+    log_script "session ended (exit=$rc)"
+    return $rc
 }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM
@@ -148,7 +154,8 @@ py_profile()     { $PY profile_gen.py "$@"; }
 py_pwn()         { $PY pwn_utils.py "$@"; }
 py_health()      { $PY -c "from hardware_guide import run_health_check; run_health_check()"; }
 py_explain()     { $PY -c "from boot_chain import explain_usbliter8; explain_usbliter8()"; }
-py_deps()        { $PY deps.py; }
+py_deps()        { $PY deps.py "$@"; }
+py_ul8()         { $PY ul8.py "$@"; }        # the verb table in cli.py
 
 # ── Commands ───────────────────────────────────────────────────
 cmd_menu() { py_menu menu; }
@@ -192,7 +199,8 @@ cmd_pwn() {
 }
 
 cmd_health() { py_health; }
-cmd_deps()   { py_deps; }
+cmd_deps()   { py_deps "${@}"; }
+cmd_ul8()    { py_ul8 "${@}"; }
 
 cmd_offsets() {
     case "${1:-list}" in
@@ -312,7 +320,8 @@ cmd_help() {
     echo -e "  ${C_EYE}postboot${NC}       post-boot setup (USB net, VNC, SSH)"
     echo -e "  ${C_EYE}pwn${NC}            check / wait for PWN DFU"
     echo -e "  ${C_EYE}health${NC}         health check (board, tools, firmware, USB)"
-    echo -e "  ${C_EYE}deps${NC}           install dependencies (pyusb, pyyaml, libusb)"
+    echo -e "  ${C_EYE}deps${NC}           check dependencies and offer to install what is missing"
+    echo -e "  ${C_EYE}ul8${NC} <verb>     any verb from cli.py, straight through (e.g. ul8 coverage --json)"
     echo -e "  ${C_EYE}offsets${NC}        list / validate / find / activate offset profiles"
     echo -e "  ${C_EYE}coverage${NC}       per-device profile status table"
     echo -e "  ${C_EYE}gaps${NC}           which profile sections still need offsets"
@@ -379,6 +388,7 @@ run_menu() {
             9|x|health)         cmd_health ;;
             o|offsets)          cmd_offsets list ;;
             c|coverage)         cmd_coverage ;;
+            u|ul8)              cmd_ul8 ;;
             m|migrate)          printf "  ${C_DIM}Usage: migrate <base.yaml> <target.yaml|iOS> [--comp-dir DIR] [--auto]${NC}\n"; cmd_migrate ;;
             p|propagate)        printf "  ${C_DIM}Usage: propagate <base.yaml> <Model> [--comp-dir DIR] [--force]${NC}\n"; cmd_propagate ;;
             t|contribute)       cmd_contribute ;;
@@ -427,9 +437,10 @@ main() {
         postboot)              cmd_postboot ;;
         pwn)                   cmd_pwn "${args[@]}" ;;
         health|doctor)         cmd_health ;;
-        deps|deps-install)     cmd_deps ;;
+        deps|deps-install)     cmd_deps "${args[@]}" ;;
         offsets)               cmd_offsets "${args[@]}" ;;
         coverage)              cmd_coverage "${args[@]}" ;;
+        ul8)                   cmd_ul8 "${args[@]}" ;;
         gaps)                  cmd_gaps "${args[@]}" ;;
         preflight|verify)      cmd_preflight "${args[@]}" ;;
         audit)                 cmd_audit "${args[@]}" ;;

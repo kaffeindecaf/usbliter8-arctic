@@ -7,29 +7,23 @@ and VNC remote control setup.
 from __future__ import annotations
 
 import os
-import sys
 import time
 import subprocess
 from pathlib import Path
 
-from colors import C, ok, err, warn, info, stage, section, divider, prompt, header
+import toolchain
+from colors import C, ok, err, warn, info, stage, section, prompt, header
+import log_utils
 
-TOOLS_DIR = Path(__file__).parent / "tools"
 DRY_RUN = False
 
 
-def _tool(name: str) -> str:
-    p = TOOLS_DIR / name
-    return str(p) if p.exists() else name
-
-
 def _run(cmd: list[str], cwd: str | None = None, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
+    """Run a command (see toolchain.run), echoing it unless this is a dry run."""
     if DRY_RUN:
-        print(f"    {C.DIM}[dry-run] {' '.join(cmd)}{C.NC}")
+        print(f"    {C.DIM}[dry-run] {' '.join(str(part) for part in cmd)}{C.NC}")
         return subprocess.CompletedProcess(cmd, 0)
-    print(f"    {C.DIM}$ {' '.join(cmd)}{C.NC}")
-    run_env = {**os.environ, **env} if env else None
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=run_env)
+    return toolchain.run(cmd, cwd=cwd, env=env, echo=True)
 
 
 def _find_script(name: str) -> Path | None:
@@ -54,7 +48,7 @@ def _find_script(name: str) -> Path | None:
 #  Boot chain scripts
 # ═══════════════════════════════════════════════════════════════
 
-def normal_boot(work_dir: str | Path, password: str = "") -> bool:
+def normal_boot(work_dir: str | Path) -> bool:
     """Build normal boot chain and send via usbliter8ctl."""
     print(section("Normal Boot"))
     print()
@@ -78,10 +72,12 @@ def normal_boot(work_dir: str | Path, password: str = "") -> bool:
     print(stage(2, "Sending boot chain to device..."))
     r = _run(["python3", str(boot_py)], cwd=str(work_dir))
     if r.returncode != 0:
-        print(err("boot.py failed"))
+        print(err(f"boot.py failed (exit={r.returncode})"))
+        log_utils.log_error(f"normal boot failed (exit={r.returncode})", module="boot_chain")
         return False
 
     print(ok("Normal boot sent — device should be booting into iOS"))
+    log_utils.log_info("normal boot chain sent", module="boot_chain")
     return True
 
 
@@ -128,7 +124,7 @@ def sshrd_boot(work_dir: str | Path) -> bool:
     return True
 
 
-def restore_device(work_dir: str | Path, password: str = "") -> bool:
+def restore_device(work_dir: str | Path) -> bool:
     """Restore custom firmware to device (ERASES ALL DATA)."""
     print(section("Restore CFW to Device"))
     print()
@@ -136,7 +132,7 @@ def restore_device(work_dir: str | Path, password: str = "") -> bool:
     print(f"  {C.RED}All data, apps, and settings will be permanently deleted.{C.NC}")
     print()
 
-    ans = input(prompt("Type YES to confirm: "))
+    ans = log_utils.safe_input(prompt("Type YES to confirm: "))
     if ans != "YES":
         print(info("Restore cancelled."))
         return False
@@ -169,6 +165,12 @@ def restore_device(work_dir: str | Path, password: str = "") -> bool:
             stderr=subprocess.DEVNULL,
         )
         time.sleep(2)
+        if proxy_proc.poll() is not None:
+            print(warn(f"TSS proxy exited immediately (code {proxy_proc.returncode})"))
+            print(f"  {C.DIM}The restore will fail without it. Check that tss_proxy_server.py "
+                  f"runs in {work_dir}.{C.NC}")
+            log_utils.log_warn(f"tss proxy exited early (code {proxy_proc.returncode})",
+                               module="boot_chain")
     print(ok("TSS proxy running"))
 
     print(stage(3, "Restoring CFW (this takes 5-15 minutes)..."))
@@ -177,9 +179,12 @@ def restore_device(work_dir: str | Path, password: str = "") -> bool:
 
     if not DRY_RUN:
         try:
+            log_utils.log_info(f"restore start: {restore_sh} in {work_dir}", module="boot_chain")
             r = subprocess.run(["bash", str(restore_sh)], cwd=str(work_dir))
             if r.returncode != 0:
-                print(err("Restore failed"))
+                print(err(f"Restore failed (exit={r.returncode})"))
+                log_utils.log_error(f"restore_cfw.sh failed with exit {r.returncode}",
+                                    module="boot_chain")
                 return False
         finally:
             if proxy_proc and proxy_proc.poll() is None:
@@ -190,6 +195,7 @@ def restore_device(work_dir: str | Path, password: str = "") -> bool:
                     proxy_proc.kill()
 
     print(ok("Restore complete! Device is now on custom firmware."))
+    log_utils.log_info("restore finished", module="boot_chain")
     return True
 
 
@@ -241,7 +247,7 @@ def setup_vnc(ssh_password: str = "alpine") -> bool:
 
     print(info("Manual VNC setup:"))
     print(f"  {C.DIM}# Start VNC server on device:{C.NC}")
-    print(f"  SSHPASS={ssh_password} {_tool('sshpass')} -e ssh root@10.7.0.2 /var/jb/usr/bin/tvncd")
+    print(f"  SSHPASS={ssh_password} {toolchain.tool('sshpass')} -e ssh root@10.7.0.2 /var/jb/usr/bin/tvncd")
     print()
     print(f"  {C.DIM}# Connect from Mac:{C.NC}")
     print(f"  open vnc://:alpine@10.7.0.2:5901")
@@ -253,7 +259,7 @@ def ssh_connect(ssh_password: str = "alpine") -> bool:
     print(section("SSH to Device"))
     print()
 
-    sshpass = _tool("sshpass")
+    sshpass = toolchain.tool("sshpass")
     base_args = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                   "-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"]
     ssh_env = {"SSHPASS": ssh_password}

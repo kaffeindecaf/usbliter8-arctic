@@ -10,12 +10,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import cfw_builder  # noqa: E402
+import cfw_builder
+import toolchain  # noqa: E402
 import migrate  # noqa: E402
 import profile_gen  # noqa: E402
 from device_offsets import SENTINEL  # noqa: E402
@@ -254,3 +254,93 @@ def test_blocked_kernel_section_is_never_patched(monkeypatch):
     assert cfw_builder.patch_kernel("/nonexistent", offsets, "/tmp") is True
     assert called == [], "a blocked kernel section must not be extracted or patched"
     assert ("kernel", "skipped") == (cfw_builder.MANIFEST[-1][0], cfw_builder.MANIFEST[-1][1])
+
+
+# ── component extraction without the macOS binaries (issue #4) ──────
+
+def test_bundled_macho_tools_are_not_used_off_macos(monkeypatch, tmp_path):
+    """tools/ holds Mach-O binaries: on Linux/Windows they must be skipped so the
+    built-in Python codec handles extraction instead of a crash."""
+
+    bundled = tmp_path / "img4"
+    bundled.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 16)     # thin Mach-O magic
+    monkeypatch.setattr(toolchain, "TOOLS_DIR", tmp_path)
+    monkeypatch.setattr(toolchain.shutil, "which", lambda _n: None)
+
+    if sys.platform == "darwin":
+        assert toolchain.tool_available("img4") is True
+    else:
+        assert toolchain.tool_available("img4") is False
+
+    native = tmp_path / "native-tool"
+    native.write_bytes(b"\x7fELF" + b"\x00" * 16)
+    assert toolchain.tool_available("native-tool") is (sys.platform != "darwin")
+
+
+def test_path_tools_are_always_usable(monkeypatch, tmp_path):
+    """A usable binary on PATH beats an unusable bundled macOS one."""
+    monkeypatch.setattr(toolchain, "TOOLS_DIR", tmp_path / "empty-tools")
+    monkeypatch.setattr(toolchain.shutil, "which", lambda name: "/usr/bin/" + name)
+    assert toolchain.tool_available("img4") is True
+    assert toolchain.tool("img4") == "/usr/bin/img4"
+
+
+def test_extract_falls_back_to_the_python_decoder(monkeypatch, tmp_path):
+    import cfw_builder
+    import img4wrap
+
+    payload = bytes.fromhex("1f2003d5000080d2") * 64
+    container = tmp_path / "iBSS, RELEASE.im4p"
+    container.write_bytes(img4wrap.wrap(payload, "ibss", "mBoot-test"))
+    out = tmp_path / "iBSS.raw"
+
+    monkeypatch.setattr(toolchain, "tool_available", lambda _n: False)
+    assert cfw_builder._extract_im4p_to_raw(container, out) is True
+    assert out.read_bytes() == payload
+
+
+def test_wrap_falls_back_to_the_python_writer(monkeypatch, tmp_path):
+    import cfw_builder
+    import img4wrap
+
+    payload = bytes.fromhex("000080d2c0035fd6") * 32
+    raw = tmp_path / "iBEC.raw"
+    raw.write_bytes(payload)
+    dest = tmp_path / "iBEC.d421.RELEASE.im4p"
+    dest.write_bytes(img4wrap.wrap(b"original" * 8, "ibec", "mBoot-20457"))
+
+    monkeypatch.setattr(toolchain, "tool_available", lambda _n: False)
+    assert cfw_builder._wrap_raw_to_im4p(raw, dest, "ibec") is True
+
+    back = img4wrap.unwrap_file(dest)
+    assert back.payload == payload
+    assert back.fourcc == "ibec"
+    assert back.description == "mBoot-20457"      # Apple's metadata is kept
+
+
+def test_wrap_reports_an_undecodable_payload(monkeypatch, tmp_path):
+    import cfw_builder
+    monkeypatch.setattr(toolchain, "tool_available", lambda _n: False)
+    raw = tmp_path / "iBSS.raw"
+    raw.write_bytes(b"payload")
+    assert cfw_builder._wrap_raw_to_im4p(raw, tmp_path / "out.im4p", "ibss") is True
+
+    monkeypatch.setitem(sys.modules, "img4wrap", None)   # simulate a broken import
+    assert cfw_builder._extract_im4p_to_raw(raw, tmp_path / "x.raw") is False
+
+
+def test_offset_listing_skips_non_profiles():
+    """sources/template/canonical are not device profiles.
+
+    canonical.yaml used to show up as "? (?) - iOS ? [?] 0 patches" because the
+    skip list only knew about the other two.
+    """
+    import device_offsets
+
+    files = device_offsets.list_offset_files()
+    names = {entry["file"] for entry in files}
+    assert names.isdisjoint(set(device_offsets.NON_PROFILE_FILES))
+    for entry in files:
+        assert entry["model"] != "?", entry
+        assert entry["device"] != "?", entry
+        assert entry["ios"] != "?", entry

@@ -6,7 +6,6 @@ and manages the active device configuration.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,15 +13,25 @@ from typing import Any
 import yaml
 
 from colors import C, ok, err, warn, info, section
+import log_utils
 
 OFFSETS_DIR = Path(__file__).parent / "offsets"
 SENTINEL = 0xDEADBEEF
 
 
-def _hex_to_bytes(hex_str: str) -> bytes:
-    """Convert hex string (with or without spaces) to bytes."""
-    clean = hex_str.replace(" ", "").lower()
-    return bytes.fromhex(clean)
+# files in offsets/ that are not device profiles: where offsets come from
+# (sources.yaml), a blank starting point (template.yaml) and the cross-source
+# canonical database (canonical.yaml). Listing or validating them as profiles
+# produced a bogus "? (?) - iOS ? [0 patches]" row.
+NON_PROFILE_FILES = ("sources.yaml", "template.yaml", "canonical.yaml")
+
+
+def hex_to_bytes(hex_str: str) -> bytes:
+    """Convert a hex string (with or without spaces) to bytes."""
+    return bytes.fromhex(hex_str.replace(" ", "").lower())
+
+
+_hex_to_bytes = hex_to_bytes          # older call sites inside this module
 
 
 def _fmt_offset(off: Any) -> str:
@@ -107,7 +116,6 @@ def validate_offsets(filepath: Path) -> tuple[int, int, list[str]]:
     if not isinstance(data, dict) or "patches" not in data:
         return 0, 1, ["Invalid YAML: missing 'patches' top-level key"]
 
-    device_info = data.get("device", "unknown")
     model = data.get("model", "unknown")
     ios = data.get("ios_version", "unknown")
 
@@ -115,8 +123,8 @@ def validate_offsets(filepath: Path) -> tuple[int, int, list[str]]:
     errors = []
 
     sections_to_check = ["ibss", "ibec", "restoreramdisk", "txm"]
-    for section in sections_to_check:
-        for item in _extract_section_offsets(data, section):
+    for sec_name in sections_to_check:
+        for item in _extract_section_offsets(data, sec_name):
             off = item["offset"]
             val = item["value"]
             if not _is_valid_offset(off):
@@ -182,8 +190,22 @@ def dump_profile_yaml(profile: dict, path: Path) -> None:
                   default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+def blocked_sections_of(offsets: dict) -> list[dict]:
+    """Blocked sections from an already-loaded profile dict.
+
+    Shape: [{"section": name, "reason": ..., "entries": N, "needs": ...}] - the
+    single parser for `blockers:`, shared with `cfw_builder` so the two cannot
+    disagree about what counts as unflashable.
+    """
+    blockers = (offsets or {}).get("blockers")
+    if isinstance(blockers, dict):
+        return [{"section": name, **(body if isinstance(body, dict) else {"reason": body})}
+                for name, body in blockers.items()]
+    return [entry for entry in blockers or [] if isinstance(entry, dict)]
+
+
 def blocked_sections(filepath: Path) -> list[dict]:
-    """Sections a profile itself declares as blocked (wrong component, no data).
+    """Sections a profile declares as blocked (wrong component, no data).
 
     Used for kernel offsets that belong to a different kernelcache: the entries
     look valid but cannot be applied, so they must count as unflashable.
@@ -192,13 +214,7 @@ def blocked_sections(filepath: Path) -> list[dict]:
         data = yaml.safe_load(Path(filepath).read_text())
     except (yaml.YAMLError, OSError):
         return []
-    blockers = (data or {}).get("blockers")
-    if isinstance(blockers, dict):
-        return [dict(reason=body, section=name) if isinstance(body, str)
-                else {"section": name, **body} for name, body in blockers.items()]
-    if isinstance(blockers, list):
-        return [b for b in blockers if isinstance(b, dict)]
-    return []
+    return blocked_sections_of(data or {})
 
 
 def pending_entries(filepath: Path) -> int:
@@ -217,7 +233,7 @@ def pending_entries(filepath: Path) -> int:
     if not isinstance(patches_data, dict):
         return 0
     count = 0
-    for section, section_data in patches_data.items():
+    for sec_name, section_data in patches_data.items():
         if isinstance(section_data, list):
             count += sum(1 for e in section_data if isinstance(e, dict) and e.get("pending"))
         elif isinstance(section_data, dict):
@@ -231,22 +247,12 @@ def pending_entries(filepath: Path) -> int:
     return count
 
 
-def load_offset_file(filepath: Path) -> dict[str, Any] | None:
-    """Load and validate a single offset YAML file. Returns dict or None if invalid."""
-    passed, failed, errors = validate_offsets(filepath)
-    if failed > 0:
-        for e in errors:
-            print(err(e))
-        return None
-    with open(filepath) as f:
-        return yaml.safe_load(f)
-
 
 def list_offset_files() -> list[dict[str, Any]]:
     """List all YAML offset files with validation status."""
     results = []
     for f in sorted(OFFSETS_DIR.glob("*.yaml")):
-        if f.name in ("sources.yaml", "template.yaml"):
+        if f.name in NON_PROFILE_FILES:
             continue
         passed, failed, _ = validate_offsets(f)
         pending = pending_entries(f)
@@ -360,7 +366,8 @@ def get_active_device() -> dict[str, Any] | None:
 
 # ── CLI (for testing / standalone use) ──
 
-if __name__ == "__main__":
+def _cli() -> int:
+    """Command line entry point: whatever it raises, guard() turns into an exit code."""
     import log_utils
     log_utils.install()          # usbliter8.log + unhandled-exception logging
     if len(sys.argv) < 2:
@@ -436,3 +443,14 @@ if __name__ == "__main__":
             print(err("Specify an offset YAML file to activate"))
             sys.exit(1)
         set_active_device(target)
+    return log_utils.EXIT_OK
+
+
+if __name__ == "__main__":
+    import log_utils
+
+    log_utils.install()          # usbliter8.log + clean exits
+
+    import deps
+    deps.ensure(("profiles",))          # offer to install what is missing
+    sys.exit(log_utils.guard(_cli))

@@ -18,6 +18,7 @@ from pathlib import Path
 import yaml
 
 from colors import C, ok, err, warn, info, section, key_value, header
+import log_utils
 from device_offsets import (
     validate_offsets,
     pending_entries,
@@ -97,7 +98,7 @@ def cmd_new(args: list[str]) -> int:
     out_path = OFFSETS_DIR / fname
 
     if out_path.exists():
-        overwrite = input(f"  {C.AMB}{fname} already exists. Overwrite? [y/N]:{C.NC} ")
+        overwrite = log_utils.safe_input(f"  {C.AMB}{fname} already exists. Overwrite? [y/N]:{C.NC} ")
         if overwrite.lower() not in ("y", "yes"):
             print(info("Cancelled"))
             return 0
@@ -255,22 +256,28 @@ def usage() -> None:
     print()
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
+def cli(argv: list[str] | None = None) -> int:
+    """Command line entry point: whatever it raises, guard() turns into an exit code."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
         usage()
-        sys.exit(0)
+        return log_utils.EXIT_OK
 
-    cmd = sys.argv[1]
-    args = sys.argv[2:]
-    rc = 0
+    cmd, args = argv[0], argv[1:]
     if cmd == "new":
-        rc = cmd_new(args)
-    elif cmd == "status":
-        rc = cmd_status()
-    elif cmd == "pr":
-        rc = cmd_pr(args)
-    else:
-        print(err(f"Unknown command: {cmd}"))
-        usage()
-        rc = 1
-    sys.exit(rc)
+        return cmd_new(args) or log_utils.EXIT_OK
+    if cmd == "status":
+        return cmd_status() or log_utils.EXIT_OK
+    if cmd == "pr":
+        return cmd_pr(args) or log_utils.EXIT_OK
+
+    print(err(f"Unknown command: {cmd}"))
+    usage()
+    return log_utils.EXIT_ERROR
+
+
+if __name__ == "__main__":
+    import log_utils
+
+    log_utils.install()          # usbliter8.log + clean exits
+    sys.exit(log_utils.guard(cli))

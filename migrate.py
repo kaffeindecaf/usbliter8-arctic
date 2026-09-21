@@ -21,8 +21,10 @@ from pathlib import Path
 
 import yaml
 
-from colors import C, ok, err, warn, info, section, header, prompt
+from colors import C, ok, err, warn, info, section, prompt
+import log_utils
 from fingerprint import MatchResult, migrate_site
+from source_audit import find_work_dirs
 
 SCRIPT_DIR = Path(__file__).parent
 OFFSETS_DIR = SCRIPT_DIR / "offsets"
@@ -129,18 +131,6 @@ def diff_section(base: dict, target: dict, section: str) -> dict[str, str]:
 
 # ── Component loading ────────────────────────────────────────────────
 
-def _find_work_dirs() -> list[Path]:
-    candidates = [
-        SCRIPT_DIR.parent / "referenceforAI",
-        Path.home() / "Desktop" / "W0lfSword" / "referenceforAI",
-        Path.home() / "Desktop" / "W0lfSword" / "referenceforAI" / "projects",
-    ]
-    dirs = []
-    for base in candidates:
-        if base.exists():
-            dirs.extend(sorted(base.glob("usbliter8-fun*/work-*")))
-    return dirs
-
 
 def _discover_raw_files() -> dict[str, dict[str, Path]]:
     """Search work dirs for extracted raw components keyed by build tag.
@@ -148,7 +138,7 @@ def _discover_raw_files() -> dict[str, dict[str, Path]]:
     Returns {build: {component: path}} where build is e.g. "27.0b2".
     """
     found: dict[str, dict[str, Path]] = {}
-    for work_dir in _find_work_dirs():
+    for work_dir in find_work_dirs():
         build = work_dir.name.split("-", 1)[-1]
         for comp, patterns in FILE_PATTERNS.items():
             if comp in found.get(build, {}):
@@ -165,7 +155,7 @@ def _discover_raw_files() -> dict[str, dict[str, Path]]:
 def _fetch_via_workdir(build: str, component: str) -> Path | None:
     """Run the work dir's get_fw.py to fetch/decrypt components. Opt-in."""
     script = None
-    for work_dir in _find_work_dirs():
+    for work_dir in find_work_dirs():
         if work_dir.name.endswith(build):
             for name in ("get_fw.py", "make_cfw.py"):
                 candidate = work_dir / name
@@ -329,10 +319,10 @@ def check_canonical(base_profile: dict, target_profile: dict,
             if k.startswith("ios_"):
                 blocks.setdefault(k[4:], v)
 
-    for section, results in all_results.items():
+    for sec_name, results in all_results.items():
         for r in results:
             entry_name = r.name.split(".", 1)[-1]
-            key = CHECKM8_KEY_MAP.get((section, entry_name))
+            key = CHECKM8_KEY_MAP.get((sec_name, entry_name))
             if not key:
                 continue
             cv = None
@@ -407,10 +397,10 @@ def format_report(base_path: Path, target_path: Path,
     ]
     review: list[str] = []
 
-    for section, results in all_results.items():
+    for sec_name, results in all_results.items():
         if not results:
             continue
-        lines += [f"## {section}", ""]
+        lines += [f"## {sec_name}", ""]
         lines.append("| name | base | target | delta | method | conf | value_changed | site b2 | site b3 | candidates |")
         lines.append("|---|---|---|---|---|---|---|---|---|---|")
         for r in results:
@@ -495,7 +485,7 @@ def run_migration(base_path: Path, target_path: Path, comp_dir: Path | None = No
     if auto and target_path.exists():
         apply_offsets(target_path, all_results, base_profile, min_confidence=min_confidence)
     elif not auto and target_path.exists() and all_results:
-        ans = input(prompt("Apply migrated offsets to the target profile? [y/N]: ") or "n")
+        ans = log_utils.safe_input(prompt("Apply migrated offsets to the target profile? [y/N]: ") or "n")
         if ans.lower() in ("y", "yes"):
             apply_offsets(target_path, all_results, base_profile,
                           min_confidence=min_confidence)
@@ -546,13 +536,13 @@ def apply_offsets(target_path: Path, all_results: dict[str, list[MatchResult]],
     base_sections = (base_profile or {}).get("patches", {})
     skipped_low: list[str] = []
 
-    for section, results in all_results.items():
-        entries = patches.get(section)
+    for sec_name, results in all_results.items():
+        entries = patches.get(sec_name)
         if entries is None:
-            # section absent entirely (e.g. txm in the template) — create it
-            base_raw = base_sections.get(section)
+            # sec_name absent entirely (e.g. txm in the template) — create it
+            base_raw = base_sections.get(sec_name)
             entries = [] if isinstance(base_raw, list) else {}
-            patches[section] = entries
+            patches[sec_name] = entries
 
         for r in results:
             if r.target_offset is None:
@@ -565,7 +555,7 @@ def apply_offsets(target_path: Path, all_results: dict[str, list[MatchResult]],
             if entry is None:
                 if not base_profile:
                     continue
-                base_entry = normalize_section(base_profile, section).get(entry_name)
+                base_entry = normalize_section(base_profile, sec_name).get(entry_name)
                 if not base_entry:
                     continue
                 entry = {"offset": base_entry["offset"], "value": base_entry.get("value", "")}
@@ -642,4 +632,6 @@ def cli_main(args: list[str]):
 
 
 if __name__ == "__main__":
-    cli_main(sys.argv[1:])
+    import log_utils
+    log_utils.install()
+    sys.exit(log_utils.guard(cli_main, sys.argv[1:]))
