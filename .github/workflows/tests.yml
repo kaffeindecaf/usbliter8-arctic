@@ -1,0 +1,68 @@
+name: tests
+
+# The "tests" job is the required status check for the branch ruleset on main,
+# so it must stay green and its name must not change without updating the
+# ruleset (see README, "Repo safety").
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: install test dependencies
+        run: python -m pip install --upgrade pip pytest pyyaml capstone
+
+      - name: every module parses
+        run: python -m compileall -q .
+
+      - name: safety check (leaks, machine paths, profile/evidence consistency)
+        run: python safety_check.py
+
+      - name: offset profiles validate
+        run: |
+          set -e
+          for f in offsets/*.yaml; do
+            grep -q '^patches:' "$f" || continue          # skip canonical/sources
+            echo "== $f"
+            python device_offsets.py validate "$f"
+          done
+
+      - name: tests
+        run: python -m pytest tests/ -q
+
+  python-3-9:
+    name: python 3.9
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: install test dependencies
+        run: python -m pip install --upgrade pip pytest pyyaml capstone
+
+      - name: tests
+        run: python -m pytest tests/ -q
