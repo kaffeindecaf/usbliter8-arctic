@@ -99,7 +99,7 @@ Nothing to install by hand up front, see [Dependencies](#dependencies-detected-a
 
 Bootloader names are not board names. Apple names iPad bootloaders after the SoC family: an iPad 9 (`j181ap`) boots `Firmware/dfu/iBSS.ipad12p.RELEASE.im4p`, an iPad mini 5 (`j211ap`) boots `iBSS.j210...`, and the XS/XS Max IPSWs carry all three sibling images. `components.py` holds the verified names and refuses to guess when several candidates match (`--force-component` takes the first one on purpose).
 
-Profile status: verified offsets for iPhone 11 Pro on 27.0b2/b3, and for iPhone 11 on 27.0 (24A437) plus 27.0b4 (24A5390f) imported from Liter8 fixtures. iPhone 11 Pro Max shares the Pro's kernel cache. iPhone 11, SE 2 and iPad 9 ship their own kernelcache binaries, so their kernel offsets have to come from that binary (the propagator refuses to copy across components). A12 devices top out at iOS 26 and need first-offset bootstrapping. Live table: `python3 profile_gen.py coverage`.
+Profile status: verified offsets for iPhone 11 Pro on 27.0b2/b3, and for iPhone 11 on 27.0 (24A437) plus 27.0b4 (24A5390f) imported from Liter8 fixtures. iPhone 11 Pro Max shares the Pro's kernel cache. iPhone 11, SE 2 and iPad 9 ship their own kernelcache binaries, so their kernel offsets have to come from that binary (the propagator refuses to copy across components). A12 devices top out at iOS 26 and need first-offset bootstrapping ([docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md)). Live table: `python3 profile_gen.py coverage`.
 
 **iPad 9 is not flashable yet**, for one narrow reason. iBSS/iBEC/TXM offsets for 27.0b2/b3 were discovered from the device's own components (15/17 entries at 0.95 confidence), two `boot_args_string` sites score under 0.90 and stay pending. The kernel section is blocked: iPad 9 boots `kernelcache.release.ipad12p`, no verified offsets exist for it, and it cannot be derived here either, because the Apple Wiki publishes RootFS/Cryptex/SEP keys only for iPad12,x, so that kernelcache cannot be decrypted offline. The profile carries a `blockers:` entry saying exactly this, and the builder refuses those entries even under `--force`. Fixing it needs someone with an iPad 9 deriving the kernel sites, or a published `ipad12p` key.
 
@@ -465,6 +465,7 @@ usbliter8-arctic/
 ├── version.py            # version + git commit of the checkout
 ├── colors.py             # ANSI helpers
 ├── .github/workflows/    # CI: compileall + safety check + profiles + tests (3.13 and 3.9)
+├── docs/                 # BOOTSTRAPPING.md (first offsets for a new device), GLOSSARY.md
 ├── offsets/              # device offset profiles (+ template, sources, canonical.yaml)
 │   └── evidence/         # preflight-recorded original bytes per profile
 ├── tools/                # binary utilities (img4, img4tool, usbliter8ctl)
@@ -483,6 +484,8 @@ If you have offsets for a device and iOS combo that is not covered, the `contrib
 ```
 
 The wizard asks for the model and iOS version, creates the profile from the template with `DEADBEEF` sentinels, opens it in `$EDITOR`, validates your work, and refuses to generate a PR description until every sentinel is gone. The `pr` command prints a copy-paste-ready description (device table, patch counts) plus the git commands. Two rules from `OffsetMigrationChecklist.md` still apply: never rate an inferred offset above LOW confidence, and never let anything under 0.90 auto-write without review.
+
+First offsets for a device that has no profile at all are a longer sitting: [docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md) is the step-by-step procedure, and [docs/GLOSSARY.md](docs/GLOSSARY.md) defines the terms the output prints (PWND DFU, IMG4, IM4P, TXM, TSS proxy, confidence tiers).
 
 ## Patch overview
 
