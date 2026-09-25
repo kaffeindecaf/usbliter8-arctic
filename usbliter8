@@ -216,6 +216,7 @@ cmd_offsets() {
 
 cmd_coverage() { py_profile coverage "$@"; }
 cmd_gaps()     { py_profile gaps "$@"; }
+cmd_bootstrap(){ py_profile bootstrap "${@}"; }
 cmd_preflight(){ $PY preflight.py "$@"; }
 cmd_audit()    { $PY source_audit.py "$@"; }
 cmd_fetch()    { $PY fetch_components.py "$@"; }
@@ -328,6 +329,7 @@ cmd_help() {
     echo -e "  ${C_EYE}offsets${NC}        list / validate / find / activate offset profiles"
     echo -e "  ${C_EYE}coverage${NC}       per-device profile status table"
     echo -e "  ${C_EYE}gaps${NC}           which profile sections still need offsets"
+    echo -e "  ${C_EYE}bootstrap${NC} <Model> <iOS> [build] - first-offset run sheet for a new device"
     echo -e "  ${C_EYE}preflight${NC}      verify a profile against the real component bytes"
     echo -e "  ${C_EYE}fetch${NC}          range-fetch IPSW components (no 6GB download)"
     echo -e "  ${C_EYE}audit${NC}          diff a profile against an upstream make_cfw.py"
@@ -365,6 +367,7 @@ run_menu() {
         menu_opt c "Coverage"       "per-device profile status"
         menu_opt m "Migrate"        "beta-to-beta offset migration"
         menu_opt p "Propagate"      "same-SoC profile propagation"
+        menu_opt B "Bootstrap"      "first-offset run sheet for a new device"
         menu_opt t "Contribute"     "add new offsets · prepare a PR"
         echo -e "  ${C_GREY}── system ────────────────────────────────────────────────${NC}"
         menu_opt i "Dependencies"   "install pyusb · pyyaml · libusb"
@@ -373,7 +376,7 @@ run_menu() {
         echo ""
         echo -e "  ${C_GREY}── shortcuts ──────────────────────────────────────────────${NC}"
         printf "  ${C_FROST}h${NC} guided  ${C_FROST}c${NC} config  ${C_FROST}b${NC} build  ${C_FROST}f${NC} flash  ${C_FROST}p${NC} pwn  ${C_FROST}x${NC} health\n"
-        printf "  ${C_FROST}o${NC} offsets  ${C_FROST}m${NC} migrate  ${C_FROST}t${NC} contribute  ${C_FROST}e${NC} explain  ${C_FROST}q${NC} quit\n"
+        printf "  ${C_FROST}o${NC} offsets  ${C_FROST}m${NC} migrate  ${C_FROST}B${NC} bootstrap  ${C_FROST}t${NC} contribute  ${C_FROST}e${NC} explain  ${C_FROST}q${NC} quit\n"
         echo -e "  ${C_DIM}  ${C_AMB}[root]${C_DIM} = needs sudo on Linux (USB access) · ${C_RED}[erases device]${C_DIM} = data loss${NC}"
         echo ""
         printf "  ${C_FROST}${B}usbliter8 ▸${NC} "
@@ -394,11 +397,12 @@ run_menu() {
             u|ul8)              cmd_ul8 ;;
             m|migrate)          printf "  ${C_DIM}Usage: migrate <base.yaml> <target.yaml|iOS> [--comp-dir DIR] [--auto] [--json] [--checkpoint|--resume [FILE]]${NC}\n"; cmd_migrate ;;
             p|propagate)        printf "  ${C_DIM}Usage: propagate <base.yaml> <Model> [--comp-dir DIR] [--force]${NC}\n"; cmd_propagate ;;
+            B|bootstrap)        printf "  ${C_DIM}Usage: bootstrap <Model> <iOS> [build] [--json]${NC}\n"; cmd_bootstrap ;;
             t|contribute)       cmd_contribute ;;
             i|deps)             cmd_deps ;;
             e|explain)          cmd_explain ;;
             q|quit|exit)        echo -e "  ${C_DIM}~ back to reality ~${NC}"; break ;;
-            *) warn "Unknown: $choice — try 1-9, o/c/m/p/t/i/e, or q" ;;
+            *) warn "Unknown: $choice — try 1-9, o/c/m/p/B/t/i/e, or q" ;;
         esac
         echo ""
         printf "  ${C_DIM}── Press Enter to continue ──${NC}"
@@ -446,6 +450,7 @@ main() {
         ul8)                   cmd_ul8 "${args[@]}" ;;
         share)                 cmd_share "${args[@]}" ;;
         gaps)                  cmd_gaps "${args[@]}" ;;
+        bootstrap)             cmd_bootstrap "${args[@]}" ;;
         preflight|verify)      cmd_preflight "${args[@]}" ;;
         audit)                 cmd_audit "${args[@]}" ;;
         fetch|components)      cmd_fetch "${args[@]}" ;;

@@ -222,6 +222,13 @@ be green before it merges, and it runs `safety_check.py`, every profile through
 
 ## One-sitting run sheet
 
+Print the sheet for your device first: `python3 profile_gen.py bootstrap <Model> <iOS>
+[build]` (`./usbliter8 bootstrap <Model> <iOS>` through the wrapper, `--json` for a
+machine-readable copy) names that board's actual component, the profiles that already
+exist, the components already on disk, which boards may share its kernel section, and
+the sources available for that build with the confidence each one lands at. The steps
+below are the same procedure in prose.
+
 1. `fetch_components.py --device <Model> --build <build> --list`, confirm the
    component names, add the `DEVICE_DB` and `kernel_components` rows.
 2. `profile_gen.py create <Model> <iOS> <build>`, open the profile in `$EDITOR`.
