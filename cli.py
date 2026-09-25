@@ -72,6 +72,11 @@ def _gaps(profile: str, extra: list[str]) -> None:
     profile_gen.cmd_gaps(json_out="--json" in extra)
 
 
+def _bootstrap(profile: str, extra: list[str]) -> int:
+    import profile_gen
+    return profile_gen.cmd_bootstrap(([profile] if profile else []) + extra)
+
+
 def _preflight(profile: str, extra: list[str]) -> int:
     import preflight
     argv = ([profile] if profile else []) + extra
@@ -178,6 +183,7 @@ VERBS: dict[str, tuple[str, Handler]] = {
     "offsets": ("list offset profiles and their patch counts", _offsets),
     "coverage": ("offset coverage matrix (--json to pipe)", _coverage),
     "gaps": ("which profile sections still need offsets", _gaps),
+    "bootstrap": ("first-offset run sheet for a device with no profile", _bootstrap),
     "preflight": ("verify a profile against the real component bytes", _preflight),
     "verify": ("alias for preflight", _preflight),
     "audit": ("audit a profile against its upstream script", _audit),

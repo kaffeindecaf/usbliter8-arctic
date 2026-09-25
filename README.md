@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-358%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-375%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -64,6 +64,7 @@ Nothing to install by hand up front, see [Dependencies](#dependencies-detected-a
 ./usbliter8 help          # every command
 ./usbliter8 pwn           # board + device + DFU state
 ./usbliter8 ul8 gaps      # which profiles still need offsets
+./usbliter8 bootstrap iPhone11,6 26.0   # first-offset run sheet for a device with none
 ```
 
 ## Menu
@@ -99,7 +100,7 @@ Nothing to install by hand up front, see [Dependencies](#dependencies-detected-a
 
 Bootloader names are not board names. Apple names iPad bootloaders after the SoC family: an iPad 9 (`j181ap`) boots `Firmware/dfu/iBSS.ipad12p.RELEASE.im4p`, an iPad mini 5 (`j211ap`) boots `iBSS.j210...`, and the XS/XS Max IPSWs carry all three sibling images. `components.py` holds the verified names and refuses to guess when several candidates match (`--force-component` takes the first one on purpose).
 
-Profile status: verified offsets for iPhone 11 Pro on 27.0b2/b3, and for iPhone 11 on 27.0 (24A437) plus 27.0b4 (24A5390f) imported from Liter8 fixtures. iPhone 11 Pro Max shares the Pro's kernel cache. iPhone 11, SE 2 and iPad 9 ship their own kernelcache binaries, so their kernel offsets have to come from that binary (the propagator refuses to copy across components). A12 devices top out at iOS 26 and need first-offset bootstrapping ([docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md)). Live table: `python3 profile_gen.py coverage`.
+Profile status: verified offsets for iPhone 11 Pro on 27.0b2/b3, and for iPhone 11 on 27.0 (24A437) plus 27.0b4 (24A5390f) imported from Liter8 fixtures. iPhone 11 Pro Max shares the Pro's kernel cache. iPhone 11, SE 2 and iPad 9 ship their own kernelcache binaries, so their kernel offsets have to come from that binary (the propagator refuses to copy across components). A12 devices top out at iOS 26 and need first-offset bootstrapping ([docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md), or `./usbliter8 bootstrap <Model> <iOS>` for the run sheet of a device that has no profile yet). Live table: `python3 profile_gen.py coverage`.
 
 **iPad 9 is not flashable yet**, for one narrow reason. iBSS/iBEC/TXM offsets for 27.0b2/b3 were discovered from the device's own components (15/17 entries at 0.95 confidence), two `boot_args_string` sites score under 0.90 and stay pending. The kernel section is blocked: iPad 9 boots `kernelcache.release.ipad12p`, no verified offsets exist for it, and it cannot be derived here either, because the Apple Wiki publishes RootFS/Cryptex/SEP keys only for iPad12,x, so that kernelcache cannot be decrypted offline. The profile carries a `blockers:` entry saying exactly this, and the builder refuses those entries even under `--force`. Fixing it needs someone with an iPad 9 deriving the kernel sites, or a published `ipad12p` key.
 
@@ -268,6 +269,7 @@ Profiles are only as good as the artefact they came from, so the repo can re-der
 - `source_audit.py` parses an upstream `make_cfw.py` (wh1te4ever or 34306) or a Liter8 fixture set and diffs it against a profile byte by byte: `COVERED`, `PARTIAL`, `MISMATCH`, `REVIEW` (PC-relative sites such as adrp/add redirects are not comparable across builds), `MISSING`, `PROFILE-ONLY`. Reports land in `research/work/`.
 - `liter8_import.py` maps Liter8's reviewed fixture oracles onto our entry names, refuses anything whose payload is not our canonical patch, marks the rest `pending`, and with `--verify-components` re-checks every mapped site against the real binary before writing.
 - `profile_gen.py gaps` prints the per-section matrix and flags profiles whose kernel section came from a board with a different kernelcache component.
+- `profile_gen.py bootstrap <Model> <iOS> [build]` prints the run sheet for a device that has no profile at all: the component names from `DEVICE_DB` (never from the board id), the profiles that already exist, the components already on disk, which boards may share this board's kernel section, the site sources available for that build with the confidence each one lands at, and the verification gate. `--json` gives the same sheet as one object.
 
 ```bash
 python3 fetch_components.py --profile offsets/iPhone12,3_27.0b3.yaml        # everything it needs
@@ -354,6 +356,8 @@ python3 profile_gen.py list                           # device database
 python3 profile_gen.py create iPhone12,3 27.0          # new profile (sentinel offsets)
 python3 profile_gen.py coverage                       # per-device status table
 python3 profile_gen.py gaps                           # which sections still need offsets
+python3 profile_gen.py bootstrap iPhone11,6 26.0      # the run sheet for a device with no profile
+python3 profile_gen.py bootstrap iPhone12,5 27.0b4 --json   # same sheet, machine readable
 
 # Sibling propagation: carries kernel/daemon offsets when both boards ship the same
 # kernelcache component, and refuses across different ones

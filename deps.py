@@ -90,6 +90,7 @@ COMMAND_FEATURES: dict[str, tuple[str, ...]] = {
     "offsets": ("profiles",),
     "coverage": ("profiles",),
     "gaps": ("profiles",),
+    "bootstrap": ("profiles",),
     "audit": ("profiles",),
     "preflight": ("profiles", "build"),
     "verify": ("profiles", "build"),
