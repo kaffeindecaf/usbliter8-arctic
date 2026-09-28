@@ -24,6 +24,14 @@ import pytest
 ROOT = Path(__file__).parent.parent
 WRAPPER = ROOT / "usbliter8"
 
+# The bash front door is this repo's own entry point. The w0lfsword bundle
+# drives the same modules through its `ul8` command and ships no wrapper, so
+# there is nothing to check in that tree.
+pytestmark = [
+    pytest.mark.skipif(not WRAPPER.exists(), reason="usbliter8 wrapper is not shipped in this tree"),
+    pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash"),
+]
+
 # Label printed on the row -> the command the row must dispatch to.
 # A new menu row without an entry here fails test_every_row_has_an_expectation.
 LABEL_COMMAND = {
@@ -96,7 +104,6 @@ def _resolve_with_bash(keys: list[str], tmp_path: Path) -> dict[str, str]:
     return resolved
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 def test_every_menu_key_resolves_to_its_own_row(tmp_path):
     rows = case_rows()
     keys = [key for key, _ in menu_rows()]
