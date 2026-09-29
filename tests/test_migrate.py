@@ -79,6 +79,70 @@ def test_mask_insn_subs_immediate_zeroes_shift_bits():
     assert mask_insn(0xF1402142) == 0xF1000142
 
 
+CBZ_X2 = 0xB4000082        # cbz x2, #0x10
+CBNZ_X0 = 0xB5000100       # cbnz x0, #0x20
+TBZ_X0_B1 = 0xB6080080     # tbz x0, #1, #0x10
+TBZ_X0_B31 = 0xB6F80080    # tbz x0, #31, #0x10
+TBNZ_X0_B31 = 0xB7F80080   # tbnz x0, #31, #0x10
+LDR_X2IMM = 0xF9402000     # ldr x2, [x0, #8]
+MOVK_X0_1 = 0xF2A00020     # movk x0, #1, lsl #16
+MOVN_X0_1 = 0x92800020     # movn x0, #1
+ADR_X0_POS = 0x10000020    # adr x0, #0x20
+ADR_X0_NEG = 0x10FFFFE0    # adr x0, #-0x100
+
+
+def test_mask_insn_cbz_cbnz_zeroes_imm19_keeps_rt():
+    assert mask_insn(CBZ_X2) == 0xB4000002   # imm19 zeroed, Rt kept
+    assert mask_insn(CBNZ_X0) == 0xB5000000
+    assert mask_insn(0x34000082) == 0x34000002   # w-register cbz, same layout
+
+
+def test_mask_insn_tbz_tbnz_zeroes_bit_select_and_imm14():
+    # bit-select bits[23:19] and imm14 bits[18:5] are both immediates: the
+    # whole window is zeroed, so two sites that differ only in the tested bit
+    # or in the branch distance produce the same masked word
+    assert mask_insn(TBZ_X0_B1) == 0xB6000000
+    assert mask_insn(TBNZ_X0_B31) == 0xB7000000
+    assert mask_insn(TBZ_X0_B31) == mask_insn(TBZ_X0_B1)
+    assert mask_insn(0xB6000100) == 0xB6000000   # tbz x0, #0, #0x20
+
+
+def test_mask_insn_adr_zeroes_immediates_keeps_rd():
+    assert mask_insn(ADR_X0_POS) == 0x10000000
+    assert mask_insn(ADR_X0_NEG) == 0x10000000   # 21-bit signed immediate
+    assert mask_insn(ADR_X0_POS) != mask_insn(ADR_X0_POS ^ 0x1F)  # Rd x0 -> x31
+
+
+def test_mask_insn_ldr_str_immediate_zeroes_imm12_keeps_size_and_opc():
+    assert mask_insn(LDR_X2IMM) == 0xF9400000
+    assert mask_insn(0xF97FE000) == 0xF9400000   # offset #0xff8, same class
+    assert mask_insn(LDR_X2IMM ^ 0x5) == 0xF9400005   # Rt kept
+    # 0xF9000000 is STR (opc=00): size/opc bits are not immediates
+    assert mask_insn(0xF9000000) != mask_insn(0xF9400000)
+
+
+def test_mask_insn_movk_movn_zero_shift_and_imm16():
+    assert mask_insn(MOVK_X0_1) == 0xF2800000   # hw + imm16 zeroed
+    assert mask_insn(MOVN_X0_1) == 0x92800000
+
+
+def test_mask_insn_add_sub_immediate_wildcards_all_of_imm12():
+    # regression: 0xFF0303FF kept word bits 16-17 (imm12 bits 6-7), so a site
+    # whose immediate moved only there came out of build_pattern with that byte
+    # pinned, and the site stopped matching its own target.
+    assert mask_insn(0x91000021) == 0x91000021
+    for imm in (0x40, 0x80, 0xC00):
+        assert mask_insn(0x91000021 | (imm << 10)) == 0x91000021
+    assert mask_insn(0x91401021) == 0x91000021   # shift bit[22] zeroed too
+    assert mask_insn(0x91000021 ^ (0x1F << 5)) != 0x91000021   # Rn kept
+
+
+def test_mask_insn_unknown_encoding_passes_through():
+    # nothing matches the class patterns: leave the word alone
+    assert mask_insn(0xDEADBEEF) == 0xDEADBEEF
+    assert mask_insn(0x4E284800) == 0x4E284800   # aarch64 SIMD, not a site class
+
+
 def test_placeholder_value_rejected_by_validator(tmp_path):
     import device_offsets
     bad = tmp_path / "placeholder.yaml"
@@ -123,6 +187,26 @@ def test_search_pattern_rejects_register_change():
     struct.pack_into("<I", hay, 0x30, ADRP_X2_PAGE ^ 0x1F)
     struct.pack_into("<I", hay, 0x34, 0x9140214F)  # add x15,x2,#0x850
     assert search_pattern(hay, pattern, mask) == [0x10]
+
+
+def test_site_with_a_moved_imm12_still_migrates():
+    """End-to-end consequence of the imm12 mask fix.
+
+    0xFF0303FF kept word bits 16-17 (imm12 bits 6-7) zeroed-when-set only, so a
+    base site whose immediate had those bits set came out of build_pattern with
+    that byte pinned: it could no longer find its own moved self.
+    """
+    context = b"".join(struct.pack("<I", 0x11223344 + i) for i in range(7))  # 28B
+    base = bytearray(64)
+    target = bytearray(64)
+    struct.pack_into("<I", base, 0x10, 0x91010021)      # add x1,x1,#0x40
+    base[0x14:0x14 + len(context)] = context
+    struct.pack_into("<I", target, 0x30, 0x91000021)    # add x1,x1,#0 (moved)
+    target[0x34:0x34 + len(context)] = context
+
+    r = migrate_site(bytes(base), bytes(target), 0x10, name="add_imm12")
+    assert r.target_offset == 0x30, r
+    assert r.confidence == 0.95
 
 
 # ── milestone fixtures: b2 -> b3 oracle (iPhone12,3) ────────────────

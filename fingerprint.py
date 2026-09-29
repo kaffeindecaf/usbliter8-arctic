@@ -52,8 +52,9 @@ def mask_insn(word: int) -> int:
         return word & 0xFF00001F
 
     # tbz / tbnz: bit-select=bits[23:19], imm14=bits[18:5]
+    # keep opcode bits[31:24] + Rt, zero the whole bit-select+imm14 window
     if w24 in (0x36, 0x37, 0xB6, 0xB7):
-        return word & 0xFFE0001F
+        return word & 0xFF00001F
 
     # ldr (literal): imm19=bits[23:5]
     if w24 & 0x1F == 0x18:
@@ -66,8 +67,9 @@ def mask_insn(word: int) -> int:
     # add/sub (immediate): shift=bits[23:22], imm12=bits[21:10]
     # must come BEFORE ldr/str-imm: subs (0xF1) also matches the ldr/str
     # top-bit pattern but needs the shift bits zeroed too
+    # keep opcode bits[31:24] + Rn/Rd, zero shift and ALL of imm12
     if w24 & 0x7F in (0x11, 0x31, 0x51, 0x71):
-        return word & 0xFF0303FF
+        return word & 0xFF0003FF
 
     # ldr/str (unsigned immediate): imm12=bits[21:10] (keep opc bits[23:22])
     if w24 & 0xE0 == 0xE0:
