@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-388%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-458%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 10,100 lines of Python in 26 modules, 305 tests. Two pip packages cover the basics (pyusb, pyyaml). pyimg4 is only needed to read firmware components off macOS, and capstone only for beta migration.
+Around 12,200 lines of Python in 27 modules, 458 tests. Two pip packages cover the basics (pyusb, pyyaml). pyimg4 is only needed to read firmware components off macOS, and capstone only for beta migration.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -79,7 +79,7 @@ Nothing to install by hand up front, see [Dependencies](#dependencies-detected-a
 | `6` | Normal boot with patches applied |
 | `7` | Post-boot setup (USB network, VNC, SSH, Sileo) |
 | `8` `p` | Check PWN/DFU status |
-| `9` `x` | Health check |
+| `9` `x` | Health check (environment, hardware, test suite) |
 | `i` | Dependencies |
 | `0` `e` | Explain the chain |
 | `q` | Quit |
@@ -120,7 +120,7 @@ Everything below this line is technical detail.
 | Restore flow with pre-checks, PWN verification, TSS proxy lifecycle, explicit `YES`, post-write validation | Run `restore_cfw.sh` and pray |
 | Post-boot toolkit: USB networking, VNC, SSH (password via `SSHPASS`, never in `ps`) | Manual setup |
 | Health check and dependency installer for apt/pacman/dnf/zypper/brew/pip | Cryptic pip errors |
-| 305 tests, a b2 to b3 ground-truth oracle, 21 audit bugs found and fixed (`foundbugs.md`) | Hacked together |
+| 458 tests, a b2 to b3 ground-truth oracle, 21 audit bugs found and fixed (`foundbugs.md`) | Hacked together |
 
 ## How the chain works
 
@@ -191,6 +191,7 @@ The bundled binaries in `tools/` are macOS Mach-O. On Linux and Windows the tool
 | `UL8_NO_DEPS=1` | skip the check entirely |
 | `UL8_AUTO_INSTALL=1` | install missing packages without asking |
 | `UL8_DEBUG=1` | print tracebacks instead of the one-line error |
+| `UL8_NO_TESTS=1` | skip the pytest run in `health` |
 
 `--no-deps` does the same as `UL8_NO_DEPS=1` for one run.
 

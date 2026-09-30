@@ -4,9 +4,15 @@ Guided Setup: wiring diagrams, RP2350 board selection, firmware download/flash,
 status/health checks, and pre-flash verification.
 """
 
+from __future__ import annotations
+
+import os
+import re
 import sys
 import socket
+import subprocess
 import time
+from importlib.util import find_spec
 from pathlib import Path
 from urllib.request import urlretrieve, URLError
 
@@ -468,6 +474,87 @@ def _offer_contribution(trigger: str) -> None:
 interactive_hardware_setup = guided_setup
 
 
+# ── test suite row (ties the health check to the CI gate) ────────────
+
+TESTS_DIR = Path(__file__).resolve().parent / "tests"
+PYTEST_TIMEOUT = 900
+
+
+def pytest_available() -> bool:
+    """True when this interpreter can run the suite at all."""
+    return find_spec("pytest") is not None
+
+
+def _run_pytest(argv: list[str]) -> subprocess.CompletedProcess:
+    """Run pytest from the repo root. Kept as its own call so tests can stub it."""
+    return subprocess.run(argv, cwd=str(TESTS_DIR.parent), capture_output=True,
+                          text=True, timeout=PYTEST_TIMEOUT, check=False)
+
+
+def parse_pytest_counts(output: str) -> dict[str, int]:
+    """Pull {"passed": 388, "failed": 1, ...} out of pytest's summary line.
+
+    The summary line is the last one pytest prints, and a word can appear more
+    than once (a test quoting "3 failed" in an assertion message), so the LAST
+    match per word is the one that counts.
+    """
+    counts: dict[str, int] = {}
+    for number, word in re.findall(
+            r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed|deselected)\b", output):
+        counts[word] = int(number)
+    return counts
+
+
+# count words in the order they are worth reading, singular and plural of
+# "error" both present because pytest prints the form that fits the number
+SUMMARY_WORDS = ("passed", "failed", "error", "errors", "skipped", "xfailed", "xpassed", "deselected")
+
+
+def inside_pytest() -> bool:
+    """True when this process is a pytest run.
+
+    pytest sets PYTEST_CURRENT_TEST for the duration of every test, which is
+    the honest signal that a suite is already running.
+    """
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def run_test_suite() -> dict:
+    """Run the repo suite, return {"ran": bool, "ok": bool, "detail": str}.
+
+    Never raises and never runs from inside the suite itself: a health check
+    under pytest would recurse into another pytest. A missing pytest or a
+    missing tests/ dir is a note, not a failed check.
+    """
+    if inside_pytest():
+        return {"ran": False, "ok": False, "detail": "skipped (already inside pytest)"}
+    if os.environ.get("UL8_NO_TESTS") == "1":
+        return {"ran": False, "ok": False, "detail": "skipped (UL8_NO_TESTS=1)"}
+    if not TESTS_DIR.is_dir():
+        return {"ran": False, "ok": False, "detail": "no tests/ in this tree"}
+    if not pytest_available():
+        return {"ran": False, "ok": False, "detail": "pytest not installed"}
+
+    argv = [sys.executable, "-m", "pytest", str(TESTS_DIR), "-q", "-p", "no:cacheprovider"]
+    try:
+        proc = _run_pytest(argv)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ran": False, "ok": False, "detail": f"could not run pytest: {exc}"}
+
+    output = f"{proc.stdout}\n{proc.stderr}"
+    counts = parse_pytest_counts(output)
+    summary = ", ".join(f"{counts[key]} {key}"
+                        for key in SUMMARY_WORDS if counts.get(key))
+    if counts:
+        duration = re.search(r"in ([\d.]+)s", output)
+        detail = summary + (f" in {duration.group(1)}s" if duration else "")
+    else:
+        detail = f"pytest exited {proc.returncode} with no summary"
+    bad = counts.get("failed") or counts.get("error") or counts.get("errors")
+    ok = proc.returncode == 0 and bool(counts) and not bad
+    return {"ran": True, "ok": ok, "detail": detail}
+
+
 def run_health_check() -> dict[str, bool]:
     """Run comprehensive hardware readiness check."""
     print(header("Hardware Health Check"))
@@ -538,6 +625,17 @@ def run_health_check() -> dict[str, bool]:
     tools_ok = toolchain.TOOLS_DIR.exists() and list(toolchain.TOOLS_DIR.glob("*"))
     print(key_value("Tool dir", f"{C.GRN}ready ({len(list(toolchain.TOOLS_DIR.glob('*')))}){C.NC}" if tools_ok else f"{C.RED}empty/missing{C.NC}"))
     results["tool_dir_ready"] = tools_ok
+
+    # 6. Test suite (the CI gate, run here so the TUI can see it)
+    suite = run_test_suite()
+    if suite["ran"]:
+        suite_color = C.GRN if suite["ok"] else C.RED
+        print(key_value("Test suite", f"{suite_color}{suite['detail']}{C.NC}"))
+        results["test_suite"] = suite["ok"]
+        if not suite["ok"]:
+            log_warn(f"Health check: test suite {suite['detail']}")
+    else:
+        print(key_value("Test suite", f"{C.AMB}{suite['detail']}{C.NC}"))
 
     # Summary
     print()
