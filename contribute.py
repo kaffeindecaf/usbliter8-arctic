@@ -12,6 +12,8 @@ The `usbliter8` bash script wraps this in an interactive wizard
 markdown description with the exact git commands to submit it.
 """
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 

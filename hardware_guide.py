@@ -4,6 +4,8 @@ Guided Setup: wiring diagrams, RP2350 board selection, firmware download/flash,
 status/health checks, and pre-flash verification.
 """
 
+from __future__ import annotations
+
 import os
 import re
 import sys
