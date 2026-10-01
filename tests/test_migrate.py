@@ -822,6 +822,53 @@ def test_missing_base_profile_is_not_a_silent_success(tmp_path, capsys):
     assert payload["ready"] is False and "not found" in payload["error"]
 
 
+def test_unusable_comp_dir_is_a_clean_error_not_a_crash(migrate_cli, tmp_path, capsys):
+    """The comp-dir check used to `raise SystemExit(err(...))` from inside the
+    library, so --json printed no JSON at all and guard turned the message into
+    "ValueError: invalid literal for int() ...". Both output modes exit 1 with
+    the reason, and nothing is written to the target profile."""
+    import migrate
+    base, target, _ = migrate_cli
+    empty = tmp_path / "no-subdirs"                # exists, but no base/ + target/
+    empty.mkdir()
+    before = target.read_text()
+
+    assert migrate.cli_main([str(base), str(target), "--comp-dir", str(empty)]) == 1
+    human = capsys.readouterr()
+    assert "--comp-dir must contain base/ and target/" in human.out
+    assert "invalid literal" not in human.out + human.err
+
+    # a directory that does not exist at all is the same clean failure
+    assert migrate.cli_main([str(base), str(target),
+                             "--comp-dir", str(tmp_path / "gone")]) == 1
+    capsys.readouterr()
+
+    assert migrate.cli_main([str(base), str(target), "--comp-dir", str(empty),
+                             "--json"]) == 1
+    piped = capsys.readouterr()
+    payload = json.loads(piped.out)                # one object, nothing else on stdout
+    assert payload["ready"] is False
+    assert "--comp-dir must contain base/ and target/" in payload["error"]
+    assert "\x1b" not in piped.out
+    assert target.read_text() == before            # bad input never half-writes
+
+
+def test_empty_target_profile_is_a_clean_error(tmp_path, capsys):
+    """A target profile that is not a mapping is bad input: exit 1, and under
+    --json a parsable error object instead of a half-run over zero patches."""
+    import migrate
+    base = ROOT / "offsets" / "iPhone12,3_27.0b2.yaml"
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("")
+
+    assert migrate.cli_main([str(base), str(empty)]) == 1
+    assert "Not a valid profile" in capsys.readouterr().out
+
+    assert migrate.cli_main([str(base), str(empty), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ready"] is False and "Not a valid profile" in payload["error"]
+
+
 def test_real_entry_point_propagates_the_exit_code(tmp_path, migrate_cli):
     """`profile_gen.py migrate` dropped cli_main's return value, so a JSON run
     exited 0 whatever the verdict said. Run the real launcher, not the function."""
@@ -844,3 +891,9 @@ def test_real_entry_point_propagates_the_exit_code(tmp_path, migrate_cli):
 
     assert run("--comp-dir", str(comp_dir), "--resume",
                str(tmp_path / "missing.json")).returncode == 1
+
+    # the front door keeps the --json contract on the input-error path too
+    bad = run("--comp-dir", str(tmp_path / "nope"), "--json")
+    assert bad.returncode == 1
+    assert "base/ and target/ subdirectories" in json.loads(bad.stdout)["error"]
+    assert "\x1b" not in bad.stdout

@@ -99,6 +99,21 @@ def test_guard_respects_sys_exit_and_clean_exit():
     assert log_utils.guard(lambda: log_utils.fatal("refused")) == log_utils.EXIT_ERROR
 
 
+def test_guard_survives_a_system_exit_message(isolated_log, capsys):
+    """`raise SystemExit("...")` is the interpreter's print-then-exit-1 idiom and
+    libraries in this repo use it for CLI input errors. guard ran int() over that
+    message, so the user got "Something went wrong: ValueError: invalid literal
+    for int() with base 10: '<the real reason>'" instead of the reason."""
+    code = log_utils.guard(lambda: sys.exit("--comp-dir must contain base/ and target/"))
+    captured = capsys.readouterr()
+    assert code == log_utils.EXIT_ERROR
+    assert "--comp-dir must contain base/ and target/" in captured.err
+    assert "invalid literal" not in captured.out + captured.err
+    assert "Something went wrong" not in captured.out + captured.err
+    # `sys.exit()` with no argument stays a clean success
+    assert log_utils.guard(lambda: sys.exit()) == log_utils.EXIT_OK
+
+
 def test_guard_returns_blocked_code_for_preflight_refusals():
     def blocked():
         raise log_utils.CleanExit(log_utils.EXIT_BLOCKED, "preflight blocked the build")

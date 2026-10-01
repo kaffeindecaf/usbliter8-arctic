@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -214,3 +215,17 @@ def test_url_resolution_prefers_the_cache(tmp_path, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
     url, version = fetch_components.resolve_ipsw_url("iPhone12,1", "24A437")
     assert url == "https://example.invalid/x.ipsw" and version == "27.0"
+
+
+def test_unknown_model_exits_cleanly_through_the_front_door():
+    """`fetch --device iPhone99,9` names the models it knows and exits 1. The
+    message is a SystemExit string, which guard used to int() into
+    "ValueError: invalid literal for int() ..." - the real error, buried."""
+    root = Path(__file__).parent.parent
+    result = subprocess.run([sys.executable, "fetch_components.py",
+                             "--device", "iPhone99,9"],
+                            cwd=root, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "unknown model 'iPhone99,9'" in result.stderr
+    assert "iPhone12,1" in result.stderr                # the known list
+    assert "invalid literal" not in result.stdout + result.stderr
