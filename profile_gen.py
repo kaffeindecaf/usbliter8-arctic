@@ -347,7 +347,11 @@ def cmd_fill(args: list[str]):
     print(info(f"profile: {profile_path.name}   from: {base_path.name}   "
                f"pending: {', '.join(pending_sections) or 'none'}"))
 
-    comps = migrate.load_components(comp_dir)
+    try:
+        comps = migrate.load_components(comp_dir)
+    except ValueError as exc:                      # unusable --comp-dir
+        print(err(str(exc)))
+        return 1
     report: dict = {}
     for sec in targets:
         comp = SECTION_TO_COMPONENT.get(sec)
@@ -514,7 +518,7 @@ def cmd_propagate(args: list[str]):
         try:
             from migrate import load_components
             comps = load_components(comp_dir)
-        except SystemExit as e:
+        except ValueError as e:
             print(warn(f"--comp-dir unusable: {e}"))
             comps = None
         if comps:

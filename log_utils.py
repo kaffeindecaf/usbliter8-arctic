@@ -169,7 +169,17 @@ def guard(func, *args, **kwargs) -> int:
         log("DEBUG", "broken pipe (output closed early)", module="guard")
         return _done(EXIT_OK)
     except SystemExit as exc:
-        return _done(int(exc.code or EXIT_OK))
+        # CPython semantics: an int code is the exit status, a string is a
+        # message printed before exiting 1. A library that did
+        # `raise SystemExit(err(...))` used to blow up here (`int()` on the
+        # message -> "invalid literal for int() with base 10: '<the real
+        # error>'"), so the user saw a ValueError instead of the reason.
+        if exc.code is None:
+            return _done(EXIT_OK)
+        if isinstance(exc.code, int):
+            return _done(exc.code)
+        print(str(exc.code), file=sys.stderr)
+        return _done(EXIT_ERROR)
     except Exception as exc:                                  # noqa: BLE001
         log("ERROR", "unhandled exception", exc=exc, module="guard")
         print()

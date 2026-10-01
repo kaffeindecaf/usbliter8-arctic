@@ -342,7 +342,11 @@ def load_components(comp_dir: Path | None = None, base_build: str = "",
         base_dir = comp_dir / "base"
         target_dir = comp_dir / "target"
         if not base_dir.is_dir() or not target_dir.is_dir():
-            raise SystemExit(err(f"--comp-dir must contain base/ and target/ subdirectories: {comp_dir}"))
+            # ValueError, not SystemExit: this is a library function, and the
+            # CLI turns it into a clean line (or a JSON error object under
+            # --json). A SystemExit from in here skipped both.
+            raise ValueError("--comp-dir must contain base/ and target/ "
+                             f"subdirectories: {comp_dir}")
         for comp in COMPONENTS:
             b = base_dir / f"{comp}.raw"
             t = target_dir / f"{comp}.raw"
