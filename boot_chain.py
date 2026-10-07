@@ -7,6 +7,7 @@ and VNC remote control setup.
 from __future__ import annotations
 
 import os
+import shutil
 import time
 import subprocess
 from pathlib import Path
@@ -24,6 +25,29 @@ FORCE_RESTORE_ENV = "UL8_FORCE_RESTORE"
 
 def _force_restore_requested() -> bool:
     return os.environ.get(FORCE_RESTORE_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+# the SSHRD boot swaps the work dir's Ramdisk for the SSH chain and leaves it
+# swapped (the SSH session needs it). Keep the one we replace, and leave a note so
+# a later CFW restore does not build from an SSH ramdisk by accident.
+RAMDISK_BACKUP = "Ramdisk_pre_sshrd"
+SSHRD_MARKER = ".ul8-sshrd"
+
+
+def _keep_replaced_ramdisk(work_dir: str | Path) -> str:
+    """Copy the Ramdisk we are about to replace, once. Returns its path, or ''."""
+    ramdisk = Path(work_dir) / "Ramdisk"
+    kept = Path(work_dir) / RAMDISK_BACKUP
+    if kept.exists():
+        return str(kept)                     # the first copy is the real original
+    if not ramdisk.is_dir():
+        return ""
+    try:
+        shutil.copytree(str(ramdisk), str(kept))
+    except OSError as exc:                                        # noqa: BLE001
+        print(warn(f"could not keep the current Ramdisk before the SSHRD swap: {exc}"))
+        return ""
+    return str(kept)
 
 
 def _run(cmd: list[str], cwd: str | None = None, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
@@ -105,12 +129,20 @@ def sshrd_boot(work_dir: str | Path) -> bool:
     ramdisk = Path(work_dir) / "Ramdisk"
 
     if rd_bak.exists():
+        kept = _keep_replaced_ramdisk(work_dir)
         if ramdisk.exists():
-            shutil = __import__("shutil")
             shutil.rmtree(str(ramdisk), ignore_errors=True)
-        shutil = __import__("shutil")
         shutil.copytree(str(rd_bak), str(ramdisk))
         print(ok("SSHRD chain loaded (Ramdisk ← Ramdisk_SSH_bak)"))
+        if kept:
+            print(f"  {C.DIM}the Ramdisk that was there is kept at {kept}{C.NC}")
+        # the swap outlives this call (the SSH session needs it), so leave a note:
+        # a CFW restore built from this work dir must not use the SSHRD ramdisk
+        try:
+            (Path(work_dir) / SSHRD_MARKER).write_text(
+                f"Ramdisk replaced by Ramdisk_SSH_bak\nprevious Ramdisk kept at {kept or RAMDISK_BACKUP}\n")
+        except OSError as exc:                                    # noqa: BLE001
+            print(warn(f"could not write {SSHRD_MARKER}: {exc}"))
 
     # Verify no mixing up
     restore_entries = list(ramdisk.glob("RestoreRamdisk*"))
@@ -141,6 +173,11 @@ def restore_device(work_dir: str | Path) -> bool:
         print(f"  {C.RED}{C.B}⚠  THIS WILL ERASE THE ENTIRE DEVICE{C.NC}")
         print(f"  {C.RED}All data, apps, and settings will be permanently deleted.{C.NC}")
         print()
+        if (Path(work_dir) / SSHRD_MARKER).is_file():
+            print(warn(f"This work dir's Ramdisk was swapped for the SSHRD chain (SSHRD boot). "
+                       f"A CFW restore should use Apple's ramdisk: the copy from before that "
+                       f"swap is at {RAMDISK_BACKUP}."))
+            print()
 
         ans = log_utils.safe_input(prompt("Type YES to confirm: "))
         if ans != "YES":
