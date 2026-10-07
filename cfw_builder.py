@@ -28,6 +28,13 @@ DRY_RUN = False
 VERBOSE = True
 FORCE = False          # --force: build despite failed preflight / pending entries
 FORCE_COMPONENT = False  # --force-component: take the first component when several match
+# which profile sections this build path writes, and how. Anything else in a
+# profile (the `txm` section today) is reported as unpatched instead of being
+# dropped silently by the dry run.
+DICT_SECTIONS = ("ibss", "ibec", "restoreramdisk")   # _apply_dict_patches
+KERNEL_SECTION = "kernel"                            # appliable_kernel_entries
+DAEMONS_SECTION = "daemons"                          # patch_userland
+DEVICETREE_SECTION = "devicetree"                    # dt_patch flags, not offsets
 # per-section outcome of this build, printed at the end so a user can see what
 # was actually patched and what was skipped (and why)
 MANIFEST: list[tuple[str, str, str]] = []
@@ -122,21 +129,36 @@ def _wrap_raw_to_im4p(raw_path: str | Path, im4p_path: str | Path, tag: str = ""
     return True
 
 
+def appliable_dict_entries(section_data: dict) -> list[tuple[str, dict]]:
+    """(name, entry) pairs a build writes from a dict-style section.
+
+    The one filter shared by the applier (`_apply_dict_patches`), the dry-run
+    plan and the tests: an entry counts only when it carries both an offset and
+    a value, so nothing can advertise a site a build would not write (an
+    offset-only entry used to be printed as patchable while the applier skipped
+    it) or hide one it would. `pending` sentinels are NOT filtered here: the
+    profile gate refuses them, and with `--force` the applier writes them.
+    """
+    if not isinstance(section_data, dict):
+        return []
+    return [(str(name), entry) for name, entry in section_data.items()
+            if isinstance(entry, dict) and "offset" in entry and "value" in entry]
+
+
 def _apply_dict_patches(fp, patches: dict, section_name: str) -> int:
     """Apply all offset/value patches from a dict section. Returns count of applied patches."""
     count = 0
-    for name, entry in patches.items():
-        if isinstance(entry, dict) and "offset" in entry and "value" in entry:
-            off = entry["offset"]
-            val = entry["value"]
-            try:
-                data = device_offsets.hex_to_bytes(val)
-            except ValueError:
-                data = val  # string for boot-args
-            _patch_at(fp, off, data)
-            count += 1
-            if VERBOSE:
-                print(f"    {C.GRN}✓{C.NC} {section_name}.{name} @ 0x{off:X}")
+    for name, entry in appliable_dict_entries(patches):
+        off = entry["offset"]
+        val = entry["value"]
+        try:
+            data = device_offsets.hex_to_bytes(val)
+        except ValueError:
+            data = val  # string for boot-args
+        _patch_at(fp, off, data)
+        count += 1
+        if VERBOSE:
+            print(f"    {C.GRN}✓{C.NC} {section_name}.{name} @ 0x{off:X}")
     return count
 
 
@@ -395,6 +417,24 @@ def patch_restoreramdisk(ipsw_dir: str | Path, offsets: dict, work_dir: str | Pa
     return True
 
 
+def _daemon_binaries(ipsw_dir: str | Path, names) -> dict[str, Path]:
+    """Locate daemon binaries by file name in an IPSW tree (one walk).
+
+    patch_userland and the dry-run plan share this, so both agree on which daemon
+    patches are applicable: the binaries live inside the rootfs dmg, so a tree
+    without an extracted rootfs has none of them.
+    """
+    wanted = {str(name) for name in names}
+    found: dict[str, Path] = {}
+    if not wanted:
+        return found
+    for root, _dirs, files in os.walk(ipsw_dir):
+        for file_name in files:
+            if file_name in wanted and file_name not in found:
+                found[file_name] = Path(root) / file_name
+    return found
+
+
 def patch_userland(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
     """Patch userland daemons (coreauthd, ctkd, mobileactivationd)."""
     print(stage("6/6", "Patching Userland Daemons"))
@@ -404,39 +444,29 @@ def patch_userland(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) ->
         print(warn("No daemon patches defined — skipping"))
         return True
 
+    daemon_patches = {name: entry for name, entry in daemon_patches.items()
+                      if isinstance(entry, dict)}
     count = 0
     missing = []
+    binaries = _daemon_binaries(ipsw_dir, daemon_patches)
     for daemon_name, patches in daemon_patches.items():
-        if not isinstance(patches, dict):
-            continue
-
-        # Find the daemon binary
-        binary_path = None
-        for root, _, files in os.walk(ipsw_dir):
-            for f in files:
-                if f == daemon_name:
-                    binary_path = Path(root) / f
-                    break
-            if binary_path:
-                break
-
-        if not binary_path:
+        binary_path = binaries.get(daemon_name)
+        if binary_path is None:
             missing.append(daemon_name)
             continue
 
         with open(binary_path, "r+b") as fp:
-            for name, entry in patches.items():
-                if isinstance(entry, dict) and "offset" in entry and "value" in entry:
-                    off = entry["offset"]
-                    val = entry["value"]
-                    try:
-                        data = device_offsets.hex_to_bytes(val)
-                        _patch_at(fp, off, data)
-                        count += 1
-                        if VERBOSE:
-                            print(f"    {C.GRN}✓{C.NC} {daemon_name}.{name} @ 0x{off:X}")
-                    except ValueError:
-                        print(err(f"Invalid hex for {daemon_name}.{name}: {val}"))
+            for name, entry in appliable_dict_entries(patches):
+                off = entry["offset"]
+                val = entry["value"]
+                try:
+                    data = device_offsets.hex_to_bytes(val)
+                    _patch_at(fp, off, data)
+                    count += 1
+                    if VERBOSE:
+                        print(f"    {C.GRN}✓{C.NC} {daemon_name}.{name} @ 0x{off:X}")
+                except ValueError:
+                    print(err(f"Invalid hex for {daemon_name}.{name}: {val}"))
 
     if missing:
         print(err(f"Daemon binaries not found in extracted IPSW: {', '.join(missing)}"))
@@ -530,6 +560,135 @@ def _print_manifest() -> None:
     print()
 
 
+def _site_entries(section_data) -> list[tuple[str, dict]]:
+    """(name, entry) pairs of offset/value entries in a list or dict section.
+
+    Container shape only, `pending` sentinels included: used to report a section
+    the build path cannot apply, so even a placeholder-only section shows up.
+    """
+    if isinstance(section_data, dict):
+        return appliable_dict_entries(section_data)
+    if isinstance(section_data, list):
+        return [(str(entry.get("name", f"[{i}]")), entry) for i, entry in enumerate(section_data)
+                if isinstance(entry, dict) and "offset" in entry and "value" in entry]
+    return []
+
+
+def dry_run_plan(ipsw_dir: str | Path, offsets: dict) -> dict:
+    """What a build would write, per profile section, without writing anything.
+
+    `--check-only` reads this. Every entry lands in exactly one bucket, so a dry
+    run can neither advertise a site a build would not write (an offset-only
+    entry used to be printed as patchable while the applier skipped it) nor stay
+    silent about a section the build path does not apply at all (the profile's
+    `txm` section today: the dry run used to end with "all patches validated"
+    while those entries were missing from the build).
+
+      patchable  entries the build path writes
+      skipped    the section is applied, this entry is not: pending sentinel,
+                 blocked section, another board's kernelcache component, a daemon
+                 whose binary is in the rootfs dmg
+      ops        devicetree flags (dt_patch edits nodes, not offsets)
+      unpatched  sections no code path applies, with the entry count
+    """
+    patches = offsets.get("patches", {}) or {}
+    blocked = {str(b.get("section")): (str(b.get("reason", "")).strip() or "blocked")
+               for b in device_offsets.blocked_sections_of(offsets)}
+    root = Path(ipsw_dir)
+
+    rd_reason = ""
+    if root.is_dir():
+        _rd, _cands, rd_reason = components.find_component(root, "restoreramdisk", offsets)
+
+    daemons_data = patches.get(DAEMONS_SECTION)
+    daemons = daemons_data if isinstance(daemons_data, dict) else {}
+    binaries = (_daemon_binaries(root, [n for n, e in daemons.items() if isinstance(e, dict)])
+                if root.is_dir() else {})
+
+    plan: dict = {"patchable": [], "skipped": [], "ops": [], "unpatched": {},
+                  "blocked": sorted(name for name in blocked if name), "rd_reason": rd_reason}
+
+    def patchable(sec_name: str, name: str, entry: dict) -> None:
+        plan["patchable"].append({"section": sec_name, "entry": name,
+                                  "offset": entry["offset"], "value": entry["value"]})
+
+    def skipped(sec_name: str, name: str, reason: str) -> None:
+        plan["skipped"].append({"section": sec_name, "entry": name, "reason": reason})
+
+    for sec_name in DICT_SECTIONS:
+        data = patches.get(sec_name)
+        if not isinstance(data, dict):
+            continue
+        for name, entry in data.items():
+            if not isinstance(entry, dict):
+                continue                       # devicetree-style flags, not sites
+            if "offset" not in entry or "value" not in entry:
+                skipped(sec_name, name, "no offset+value in the profile")
+            elif entry.get("pending"):
+                skipped(sec_name, name, "pending sentinel (no offsets for this device yet)")
+            elif sec_name in blocked:
+                skipped(sec_name, name, f"section blocked: {blocked[sec_name]}")
+            elif sec_name == "restoreramdisk" and rd_reason == "modern-dmg-layout":
+                skipped(sec_name, name, "needs mount + re-sign (bare dmg)")
+            else:
+                patchable(sec_name, name, entry)
+
+    kernel = patches.get(KERNEL_SECTION)
+    if isinstance(kernel, list):
+        for index, entry in enumerate(kernel):
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name", f"kernel[{index}]"))
+            if "offset" not in entry or "value" not in entry:
+                skipped(KERNEL_SECTION, name, "no offset+value in the profile")
+            elif entry.get("invalid_component"):
+                skipped(KERNEL_SECTION, name, "derived from another kernelcache component")
+            elif KERNEL_SECTION in blocked:
+                skipped(KERNEL_SECTION, name, f"section blocked: {blocked[KERNEL_SECTION]}")
+            elif entry.get("pending"):
+                skipped(KERNEL_SECTION, name, "pending sentinel (no offsets for this device yet)")
+            else:
+                patchable(KERNEL_SECTION, name, entry)
+
+    for daemon_name, entries in daemons.items():
+        if not isinstance(entries, dict):
+            continue
+        for name, entry in entries.items():
+            if not isinstance(entry, dict) or "offset" not in entry or "value" not in entry:
+                continue
+            label = f"{daemon_name}.{name}"
+            if entry.get("pending"):
+                skipped(DAEMONS_SECTION, label, "pending sentinel (no offsets for this device yet)")
+            elif daemon_name not in binaries:
+                skipped(DAEMONS_SECTION, label,
+                        "daemon binary is in the rootfs dmg, not in this tree")
+            else:
+                patchable(DAEMONS_SECTION, label, entry)
+
+    dt_flags = patches.get(DEVICETREE_SECTION)
+    if isinstance(dt_flags, dict):
+        plan["ops"] = [str(name) for name, flag in dt_flags.items() if flag]
+
+    known = set(DICT_SECTIONS) | {KERNEL_SECTION, DAEMONS_SECTION, DEVICETREE_SECTION}
+    for sec_name, data in patches.items():
+        if sec_name in known:
+            continue
+        entries = _site_entries(data)
+        if entries:
+            plan["unpatched"][sec_name] = {
+                "entries": len(entries),
+                "reason": "the build path has no patcher for this section"}
+
+    reasons: dict[str, int] = {}
+    for item in plan["skipped"]:
+        reasons[item["reason"]] = reasons.get(item["reason"], 0) + 1
+    plan["skip_reasons"] = reasons
+    plan["counts"] = {"patchable": len(plan["patchable"]), "skipped": len(plan["skipped"]),
+                      "ops": len(plan["ops"]),
+                      "unpatched": sum(v["entries"] for v in plan["unpatched"].values())}
+    return plan
+
+
 def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
     """Full CFW build pipeline."""
     with log_utils.timed('build', 'build_cfw'):
@@ -585,43 +744,41 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
                         print(f"    {C.GRN}✓{C.NC} {label}: {path.name}")
                     elif stem:
                         print(f"    {C.AMB}—{C.NC} {label}: not found (expected {stem})")
-            rd_reason = ""
-            if ipsw_path.is_dir():
-                _rd, _cands, rd_reason = components.find_component(ipsw_path, "restoreramdisk",
-                                                                offsets)
-            blocked_names = {b.get("section") for b in device_offsets.blocked_sections_of(offsets)}
-            skipped = 0
-            for section_name in ["ibss", "ibec", "devicetree", "kernel", "restoreramdisk", "daemons"]:
-                section_data = offsets.get("patches", {}).get(section_name, {})
-                if section_name == "kernel" and isinstance(section_data, list):
-                    for entry in section_data:
-                        if not isinstance(entry, dict):
-                            continue
-                        if entry.get("invalid_component") or section_name in blocked_names:
-                            skipped += 1
-                            continue
-                        print(f"    {C.DIM}[dry-run]{C.NC} {entry.get('name', '?')} @ 0x{entry.get('offset', 0):X} → {entry.get('value', '?')}")
-                elif isinstance(section_data, dict):
-                    for name, entry in section_data.items():
-                        if isinstance(entry, dict) and "offset" in entry:
-                            if entry.get("pending"):
-                                skipped += 1
-                                continue
-                            if section_name == "restoreramdisk" and rd_reason == "modern-dmg-layout":
-                                skipped += 1
-                                continue
-                            print(f"    {C.DIM}[dry-run]{C.NC} {section_name}.{name} @ 0x{entry['offset']:X}")
+            plan = dry_run_plan(ipsw_path, offsets)
+            counts = plan["counts"]
+            for item in plan["patchable"]:
+                if item["section"] == KERNEL_SECTION:
+                    print(f"    {C.DIM}[dry-run]{C.NC} {item['entry']} @ 0x{item['offset']:X} "
+                          f"→ {item['value']}")
+                else:
+                    print(f"    {C.DIM}[dry-run]{C.NC} {item['section']}.{item['entry']} "
+                          f"@ 0x{item['offset']:X}")
+            for op in plan["ops"]:
+                print(f"    {C.DIM}[dry-run]{C.NC} {DEVICETREE_SECTION}.{op}")
             print()
-            if skipped:
-                print(warn(f"{skipped} entry/entries would be SKIPPED (pending, invalid for "
+            if counts["skipped"]:
+                print(warn(f"{counts['skipped']} entry/entries would be SKIPPED (pending, invalid for "
                            f"this device's component, or not appliable by this build path)"))
-            if blocked_names:
-                print(warn(f"blocked section(s): {', '.join(sorted(n for n in blocked_names if n))} "
+                for reason, number in sorted(plan["skip_reasons"].items(), key=lambda kv: -kv[1]):
+                    print(f"    {C.DIM}{number}x {reason}{C.NC}")
+            for section_name, details in sorted(plan["unpatched"].items()):
+                print(warn(f"{details['entries']} {section_name} entry/entries are NOT applied: "
+                           f"{details['reason']}"))
+            if plan["blocked"]:
+                print(warn(f"blocked section(s): {', '.join(plan['blocked'])} "
                            f"(see the profile's blockers:)"))
-            if rd_reason == "modern-dmg-layout":
+            if plan["rd_reason"] == "modern-dmg-layout":
                 print(warn("restore ramdisk is a bare .dmg: those offsets target "
                            "restored_external/asr inside the mounted image"))
-            print(ok("Dry-run complete — all patches validated"))
+            skipped_text = f", {counts['skipped']} skipped" if counts["skipped"] else ""
+            print(ok(f"Dry-run complete — {counts['patchable']} patch site(s) would be written"
+                     f"{skipped_text}"))
+            log_utils.log("WARN" if (counts["skipped"] or plan["unpatched"]) else "INFO",
+                          f"dry run {offsets.get('model', '?')}: {counts['patchable']} patchable, "
+                          f"{counts['skipped']} skipped, "
+                          f"{counts['unpatched']} in unapplied sections "
+                          f"({', '.join(sorted(plan['unpatched'])) or 'none'})",
+                          module="cfw_builder")
             shutil.rmtree(work_dir)
             return True
 
@@ -705,7 +862,7 @@ def _cli() -> int:
 
     if len(args) < 2:
         print(f"  Usage: {C.FROST}python3 cfw_builder.py <ipsw_path> <offsets.yaml> [--dry-run|--check-only] [--quiet]{C.NC}")
-        print(f"  Flags: --check-only    Validate patches without extracting IPSW")
+        print(f"  Flags: --check-only    Validate every patch site without extracting the IPSW")
         print(f"         --quiet         Suppress per-patch output")
         print(f"         --force         Build even when preflight fails (NOT recommended)")
         print(f"         --force-component  Use the first component when several match")
@@ -718,8 +875,10 @@ def _cli() -> int:
         print(err(f"Offset file not found: {offsets}"))
         sys.exit(1)
 
-    build_cfw(ipsw, offsets)
-    return log_utils.EXIT_OK
+    built = build_cfw(ipsw, offsets)
+    # the exit code is the verdict, so a refused or failed run cannot look like a
+    # success to a caller that gates on it (`--check-only` before a restore)
+    return log_utils.EXIT_OK if built else log_utils.EXIT_ERROR
 
 
 if __name__ == "__main__":
