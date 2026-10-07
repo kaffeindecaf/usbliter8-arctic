@@ -12,6 +12,10 @@ classified against the real component instead of being trusted:
                    the profile's patch value is not already there
   already-patched  the patch value is already present: the component was built
                    from a patched or wrong-build image
+  no-op            (site-dependent entry only) the value at the site IS the value
+                   the profile wants to write: an adrp/add pair or a branch delta
+                   copied from the target build patches nothing, so the redirect
+                   this entry exists for never happens
   changed          the recorded original bytes are NOT at the site: the profile
                    does not belong to this component (wrong board or build)
   implausible      the site does not decode as an instruction / is all zeros
@@ -46,7 +50,7 @@ import yaml
 
 import log_utils
 from colors import C, err, info, ok, section, warn
-from device_offsets import _hex_to_bytes, pending_entries, validate_offsets
+from device_offsets import _hex_to_bytes, is_site_dependent, pending_entries, validate_offsets
 from profile_gen import DEVICE_DB
 
 ROOT = Path(__file__).parent
@@ -74,8 +78,9 @@ STATUS_COLOR = {
     "out-of-range": C.RED,
     "skipped": C.DIM,
     "unverifiable": C.AMB,
+    "no-op": C.RED,
 }
-FAIL_STATUSES = {"changed", "implausible", "out-of-range"}
+FAIL_STATUSES = {"changed", "implausible", "out-of-range", "no-op"}
 WARN_STATUSES = {"already-patched", "unverifiable", "skipped"}
 
 
@@ -128,6 +133,7 @@ class Report:
             "verified": self.count("match", "plausible"),
             "changed": self.count("changed"),
             "already_patched": self.count("already-patched"),
+            "no_op": self.count("no-op"),
             "implausible": self.count("implausible"),
             "out_of_range": self.count("out-of-range"),
             "skipped": self.count("skipped"),
@@ -305,6 +311,18 @@ def check_site(section: str, name: str, entry: dict, raw: bytes,
 
     current = raw[offset:offset + max(len(original) // 2 or 4, len(value_bytes))]
     current_hex = current.hex()
+
+    if (value_bytes and is_site_dependent(name)
+            and raw[offset:offset + len(value_bytes)] == value_bytes):
+        # The value is the site's own instruction (what the fill engine writes when
+        # it has nothing better): writing it back would patch nothing, so this
+        # entry is not the redirect it claims to be. Seen on iPad12,1/12,2 27.0b3,
+        # whose boot_args_adrp/add and keep_nonce_b values came from the site.
+        return Site(section, name, offset, "no-op",
+                    "value is this site's own instruction, so the pc-relative redirect / "
+                    "branch would not happen (value copied from the target build, "
+                    "needs a reviewed one)",
+                    original=original or "", current=current_hex, value=str(value))
 
     if original:
         want = bytes.fromhex(original)
@@ -601,7 +619,7 @@ def print_report(report: Report, *, verbose: bool = True) -> None:
     if report.structure:
         print()
 
-    order = ["changed", "implausible", "out-of-range", "already-patched",
+    order = ["changed", "implausible", "out-of-range", "no-op", "already-patched",
              "unverifiable", "plausible", "match", "skipped"]
     for status in order:
         rows = [s for s in report.sites if s.status == status]
@@ -623,7 +641,7 @@ def print_report(report: Report, *, verbose: bool = True) -> None:
              "blocked": "BLOCKED — do not flash"}[report.verdict]
     print(f"  {verdict_color}{label}{C.NC}  "
           f"{C.DIM}{report.count('match', 'plausible')} verified · "
-          f"{report.count('changed') + report.count('implausible') + report.count('out-of-range')} bad · "
+          f"{report.count(*sorted(FAIL_STATUSES))} bad · "
           f"{report.count('skipped')} unchecked{C.NC}")
     print()
 

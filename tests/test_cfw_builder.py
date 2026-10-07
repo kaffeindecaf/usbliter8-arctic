@@ -1,9 +1,14 @@
-"""Tests for the CFW builder dry run (`--check-only`).
+"""Tests for the CFW builder dry run (`--check-only`) and the TXM patcher.
 
 C1.1: the dry run has to account for every patch site in a profile, through the
 same entry filter the applier uses, and it has to say so when a whole section is
-not applied by this build path (the profile's `txm` section). A count a user
-gates a restore on must be the count a build would write.
+not applied by this build path. A count a user gates a restore on must be the
+count a build would write.
+
+C1.6: the profiles carry a `txm` section and nothing applied it, so every CFW
+booted with Apple's module validation intact. The dry run could only report that;
+now the section has a patcher and these tests pin it (sites written, container
+fourcc kept, blocked section refused, missing component a clean skip).
 
 No hardware, no network, no real component: synthetic payloads with real
 AArch64 words (same trick as tests/test_preflight.py) in a fake IPSW tree.
@@ -41,8 +46,8 @@ PAYLOAD[0x3004:0x3008] = W_ADD
 
 # one site per kind: two plain, one offset-only (never written by the applier),
 # one kernel entry that belongs to another board's kernelcache, one daemon whose
-# binary only exists when the rootfs is extracted, one section (txm) no code path
-# applies at all
+# binary only exists when the rootfs is extracted, one txm site (applied since
+# C1.6)
 PATCHES = {
     "ibss": {
         "image4_validate_nop": {"offset": 0x1000, "value": "1f2003d5"},
@@ -57,7 +62,7 @@ PATCHES = {
     ],
     "devicetree": {"remove_content_protect": True, "ephemeral_storage": False},
     "restoreramdisk": {"asr_sig_bypass": {"offset": 0x1F650, "value": "1f2003d5"}},
-    "txm": {"query_module0": {"offset": 0x39CB0, "value": "000080d2"}},
+    "txm": {"query_module0": {"offset": 0x2000, "value": "000080d2"}},
     "daemons": {"coreauthd": {"anti_sep_crash": {"offset": 0x95C0, "value": "1f2003d5"}}},
 }
 
@@ -84,6 +89,22 @@ def _tree(tmp_path: Path, *, bare_dmg: bool = False, daemon: str = "") -> Path:
     if daemon:
         (tree / "rootfs").mkdir()
         (tree / "rootfs" / daemon).write_bytes(b"\x00" * 0x100)
+    return tree
+
+
+def _container_tree(tmp_path: Path, sections=("ibss", "txm"), board: str = "n104ap") -> Path:
+    """Fake IPSW tree holding real IMG4 containers, as an unzipped IPSW does."""
+    import img4wrap
+
+    tree = tmp_path / f"ipsw-{'-'.join(sections)}"
+    (tree / "Firmware" / "dfu").mkdir(parents=True)
+    payload = bytes(PAYLOAD)
+    if "ibss" in sections:
+        (tree / "Firmware" / "dfu" / f"iBSS.{board}.RELEASE.im4p").write_bytes(
+            img4wrap.wrap(payload, "ibss", "mBoot-20457"))
+    if "txm" in sections:
+        (tree / "Firmware" / "txm.iphoneos.release.im4p").write_bytes(
+            img4wrap.wrap(payload, "trxm", "1"))
     return tree
 
 
@@ -121,9 +142,9 @@ def test_no_site_in_the_profile_is_invisible(tmp_path):
     plan = cfw_builder.dry_run_plan(_tree(tmp_path), _offsets(_profile(tmp_path, PATCHES)))
     counted = plan["counts"]["patchable"] + plan["counts"]["skipped"] + plan["counts"]["unpatched"]
     assert counted == 9    # ibss 3 + ibec 1 + kernel 2 + ramdisk 1 + txm 1 + daemons 1
-    assert plan["counts"]["patchable"] == 5
+    assert plan["counts"]["patchable"] == 6
     assert plan["counts"]["skipped"] == 3
-    assert plan["counts"]["unpatched"] == 1
+    assert plan["counts"]["unpatched"] == 0
 
 
 def test_counts_match_their_buckets(tmp_path):
@@ -134,13 +155,11 @@ def test_counts_match_their_buckets(tmp_path):
     assert plan["counts"]["unpatched"] == sum(v["entries"] for v in plan["unpatched"].values())
 
 
-def test_txm_section_is_reported_not_silently_dropped(tmp_path):
-    """The whole txm section is never applied: the plan has to say so."""
+def test_txm_section_is_a_patchable_section(tmp_path):
+    """C1.6: the txm sites are written by the build path, not just reported."""
     plan = cfw_builder.dry_run_plan(_tree(tmp_path), _offsets(_profile(tmp_path, PATCHES)))
-    assert "txm" in plan["unpatched"]
-    assert plan["unpatched"]["txm"]["entries"] == 1
-    assert "build path" in plan["unpatched"]["txm"]["reason"]
-    assert all(item["section"] != "txm" for item in plan["patchable"])
+    assert "txm" not in plan["unpatched"]
+    assert ("txm", "query_module0") in {(i["section"], i["entry"]) for i in plan["patchable"]}
 
 
 def test_unknown_section_is_reported_unpatched(tmp_path):
@@ -221,11 +240,12 @@ def test_dry_run_prints_the_counts_and_changes_nothing(tmp_path, monkeypatch, ca
     assert cfw_builder.build_cfw(tree, profile) is True
 
     out = capsys.readouterr().out
-    assert "5 patch site(s) would be written" in out
+    assert "6 patch site(s) would be written" in out
     assert "3 entry/entries would be SKIPPED" in out
-    assert "1 txm entry/entries are NOT applied" in out
+    assert "NOT applied" not in out
     assert "[dry-run]" in out
     assert "ibss.image4_validate_nop @ 0x1000" in out
+    assert "txm.query_module0 @ 0x2000" in out
     assert "devicetree.remove_content_protect" in out
     assert _hashes(tree) == before                    # not one byte written
     assert not (tree.parent / "CFW").exists()
@@ -241,8 +261,8 @@ def test_check_only_cli_reports_the_counts(tmp_path):
                            "--check-only"],
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
     assert proc.returncode == 0, proc.stderr
-    assert "5 patch site(s) would be written" in proc.stdout
-    assert "txm" in proc.stdout and "NOT applied" in proc.stdout
+    assert "6 patch site(s) would be written" in proc.stdout
+    assert "txm.query_module0 @ 0x2000" in proc.stdout
 
 
 def test_check_only_cli_exits_nonzero_when_the_gate_refuses(tmp_path):
@@ -261,3 +281,98 @@ def test_check_only_cli_exits_nonzero_when_the_gate_refuses(tmp_path):
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
     assert proc.returncode == 1, proc.stdout
     assert "invalid entry" in proc.stdout
+
+
+# ── the TXM patcher (C1.6) ─────────────────────────────────────────
+
+def test_txm_patcher_writes_its_sites_and_keeps_the_container(tmp_path, monkeypatch, capsys):
+    """The txm section is applied, in Apple's own container shape."""
+    import img4wrap
+
+    tree = _container_tree(tmp_path, sections=("txm",))
+    offsets = {"patches": {"txm": {"query_module0": {"offset": 0x2000, "value": "000080d2"}}}}
+    dest = tree / "Firmware" / "txm.iphoneos.release.im4p"
+    work = tmp_path / "work"
+    work.mkdir()
+
+    monkeypatch.setattr(cfw_builder, "DRY_RUN", False)
+    monkeypatch.setattr(cfw_builder, "VERBOSE", False)
+    monkeypatch.setattr(cfw_builder, "FORCE_COMPONENT", False)
+    cfw_builder.MANIFEST.clear()
+
+    assert cfw_builder.patch_txm(tree, offsets, work) is True
+    capsys.readouterr()
+
+    result = img4wrap.unwrap_file(dest)
+    assert result.fourcc == cfw_builder.TXM_FOURCC == "trxm"
+    assert result.description == "1"                     # Apple's metadata survives
+    assert result.payload[0x2000:0x2004] == W_MOV0
+    assert result.payload[0x1000:0x1004] == W_BNE        # nothing else touched
+    assert ("txm", "patched", "1 entries → txm.iphoneos.release.im4p") in cfw_builder.MANIFEST
+
+
+def test_txm_patcher_skips_cleanly_without_a_component(tmp_path, monkeypatch, capsys):
+    tree = _tree(tmp_path)
+    offsets = {"patches": {"txm": {"query_module0": {"offset": 0x2000, "value": "000080d2"}}}}
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr(cfw_builder, "VERBOSE", False)
+    monkeypatch.setattr(cfw_builder, "FORCE_COMPONENT", False)
+    cfw_builder.MANIFEST.clear()
+
+    assert cfw_builder.patch_txm(tree, offsets, work) is True
+    out = capsys.readouterr().out
+    assert "TXM not found" in out
+    assert cfw_builder.MANIFEST[0][1] == "skipped"
+
+
+def test_txm_patcher_refuses_a_blocked_section_even_with_force(tmp_path, monkeypatch, capsys):
+    tree = _container_tree(tmp_path, sections=("txm",))
+    dest = tree / "Firmware" / "txm.iphoneos.release.im4p"
+    before = hashlib.sha256(dest.read_bytes()).hexdigest()
+    offsets = {"patches": {"txm": {"query_module0": {"offset": 0x2000, "value": "000080d2"}}},
+               "blockers": {"txm": {"entries": 1, "reason": "no verified trxm offsets"}}}
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setattr(cfw_builder, "DRY_RUN", False)
+    monkeypatch.setattr(cfw_builder, "VERBOSE", False)
+    monkeypatch.setattr(cfw_builder, "FORCE", True)
+    cfw_builder.MANIFEST.clear()
+
+    assert cfw_builder.patch_txm(tree, offsets, work) is True
+    assert "BLOCKED" in capsys.readouterr().out
+    assert hashlib.sha256(dest.read_bytes()).hexdigest() == before
+    assert cfw_builder.MANIFEST[0][1] == "skipped"
+
+
+def test_build_patches_an_extracted_tree_in_place(tmp_path, monkeypatch, capsys):
+    """A directory used to die with IsADirectoryError from zipfile.
+
+    The return value is False on purpose: this minimal tree has no iBEC or
+    DeviceTree, which a CFW needs (patch_ibec/patch_devicetree report a missing
+    component as a failure). The point is that the build *runs* against the tree
+    and writes the sections it can.
+    """
+    import img4wrap
+
+    tree = _container_tree(tmp_path)
+    profile = _profile(tmp_path, {
+        "ibss": {"image4_validate_nop": {"offset": 0x1000, "value": "1f2003d5"}},
+        "txm": {"query_module0": {"offset": 0x2000, "value": "000080d2"}},
+    })
+    monkeypatch.setattr(cfw_builder, "DRY_RUN", False)
+    monkeypatch.setattr(cfw_builder, "VERBOSE", False)
+    monkeypatch.setattr(cfw_builder, "FORCE", True)
+    monkeypatch.setattr(cfw_builder, "FORCE_COMPONENT", False)
+    cfw_builder.MANIFEST.clear()
+
+    cfw_builder.build_cfw(tree, profile)
+    out = capsys.readouterr().out
+    assert "already extracted" in out
+    assert "IsADirectoryError" not in out
+
+    ibss = img4wrap.unwrap_file(tree / "Firmware" / "dfu" / "iBSS.n104ap.RELEASE.im4p")
+    assert ibss.payload[0x1000:0x1004] == W_NOP
+    assert ibss.description == "mBoot-20457"             # Apple's metadata survives
+    txm = img4wrap.unwrap_file(tree / "Firmware" / "txm.iphoneos.release.im4p")
+    assert txm.payload[0x2000:0x2004] == W_MOV0

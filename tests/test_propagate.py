@@ -201,21 +201,35 @@ def test_propagate_comp_dir_discovery(offsets_dir, tmp_path, capsys):
     for name, (base_off, _) in IBSS_ENTRIES.items():
         e = ibss[name]
         assert e["offset"] == base_off + shift, f"{name}: expected shifted offset"
-        assert e["pending"] is False, f"{name}: should have been discovered"
         assert e["method"] == "cross-device"
         assert e["confidence"] >= 0.90
+        if device_offsets.is_site_dependent(name):
+            # the site is located, but the only value the engine could offer is
+            # the site's own instruction — a no-op patch (see iPad12,x 27.0b3)
+            assert e["pending"] is True, f"{name}: must stay pending"
+            assert "value" not in e, f"{name}: must not carry a site copy"
+            assert "site-dependent" in e["reason"]
+        else:
+            assert e["pending"] is False, f"{name}: should have been discovered"
 
-    # value change at the site recomputed into the profile
-    assert ibss["boot_args_add"]["value"] == "422d4091"
-    assert ibss["boot_args_add"]["value_recomputed"] is True
+    # the adrp/add pair never becomes a no-op patch, whatever the site holds
+    assert "value" not in ibss["boot_args_add"]
+    assert "value_recomputed" not in ibss["boot_args_add"]
 
     # ibec/txm have no components → stay pending
     assert prof["patches"]["ibec"]["keep_nonce_b"]["pending"] is True
     assert prof["patches"]["txm"]["query_module0"]["pending"] is True
 
+    # what is left pending for a value reason is named for the operator
+    stayed = profile_gen.site_dependent_pending(prof)
+    assert stayed == ["ibec.keep_nonce_b", "ibss.boot_args_add", "ibss.boot_args_adrp"]
+    out = capsys.readouterr().out
+    assert "site-dependent entry/entries located but left pending" in out
+
     passed, failed, _ = device_offsets.validate_offsets(offsets_dir / "iPhone12,5_27.0b2.yaml")
     assert failed == 0
-    assert passed == 2 + 1 + 1 + 5  # kernel 2 + ramdisk 1 + daemons 1 + ibss 5
+    # kernel 2 + ramdisk 1 + daemons 1 + ibss 3 (the two site-dependent ones are pending)
+    assert passed == 2 + 1 + 1 + 3
 
 
 def test_propagate_comp_dir_low_confidence_stays_pending(offsets_dir, tmp_path):

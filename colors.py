@@ -1,5 +1,8 @@
 """Arctic Wolf color palette — shared across all usbliter8-arctic modules."""
 
+from __future__ import annotations
+
+
 class C:
     WOLF  = '\033[38;5;153m'
     ICE   = '\033[38;5;195m'
@@ -41,7 +44,7 @@ def warn(msg: str) -> str:
 def info(msg: str) -> str:
     return f"  {C.ICE}ℹ{C.NC} {msg}"
 
-def stage(n: int, msg: str) -> str:
+def stage(n: int | str, msg: str) -> str:
     return f"  {C.EYE}[{n}]{C.NC} {msg}"
 
 def header(text: str) -> str:

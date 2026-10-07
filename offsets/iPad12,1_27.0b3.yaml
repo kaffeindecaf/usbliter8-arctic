@@ -138,14 +138,16 @@ patches:
       confidence: 0.95
     boot_args_adrp:
       offset: 0x2d770
-      value: '62080090'
       method: cross-device
       confidence: 0.95
+      pending: true
+      reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"
     boot_args_add:
       offset: 0x2d774
-      value: 428c2f91
       method: cross-device
       confidence: 0.95
+      pending: true
+      reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"
     boot_args_string:
       offset: 0xdeadbeef
       value: -v wdt=-1 rd=md0 -restore
@@ -153,9 +155,10 @@ patches:
   ibec:
     keep_nonce_b:
       offset: 0x391f8
-      value: ceaf0194
       method: cross-device
       confidence: 0.95
+      pending: true
+      reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"
     image4_validate_nop:
       offset: 0x26578
       value: 1f2003d5
@@ -168,14 +171,16 @@ patches:
       confidence: 0.95
     boot_args_adrp:
       offset: 0x2d770
-      value: '62080090'
       method: cross-device
       confidence: 0.95
+      pending: true
+      reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"
     boot_args_add:
       offset: 0x2d774
-      value: 428c2f91
       method: cross-device
       confidence: 0.95
+      pending: true
+      reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"
     boot_args_string:
       offset: 0xdeadbeef
       value: -v wdt=-1 rd=md0 -restore
@@ -225,3 +230,8 @@ pending:
   - {section: ibss, entry: boot_args_string, reason: "fingerprint below the 0.90 confidence floor"}
   - {section: ibec, entry: boot_args_string, reason: "fingerprint below the 0.90 confidence floor"}
   - {section: restoreramdisk, entry: asr_sig_bypass/fdr_force_succeed, reason: "offsets target binaries inside the mounted dmg; this build path cannot mount + re-sign it"}
+  - {section: ibss, entry: boot_args_adrp, reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"}
+  - {section: ibss, entry: boot_args_add, reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"}
+  - {section: ibec, entry: boot_args_adrp, reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"}
+  - {section: ibec, entry: boot_args_add, reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"}
+  - {section: ibec, entry: keep_nonce_b, reason: "site-dependent immediate: the value at the site is the site's own instruction (a no-op patch), so it needs a reviewed value for this build"}

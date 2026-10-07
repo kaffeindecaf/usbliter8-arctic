@@ -25,6 +25,7 @@ import yaml
 
 from colors import C, ok, err, warn, info, section, prompt
 import log_utils
+from device_offsets import SITE_DEPENDENT_REASON, is_site_dependent
 from fingerprint import MatchResult, migrate_site
 from source_audit import find_work_dirs
 
@@ -771,6 +772,22 @@ def _update_entry(entry: dict, r: MatchResult):
     if r.candidates:
         meta["candidates"] = [f"0x{c:X}" for c in r.candidates]
     old_val = str(entry.get("value", "")).replace(" ", "")
+    if is_site_dependent(r.name):
+        # The site's own word is not a patch: an adrp/add pair has to point at a
+        # slot in THIS build and keep_nonce_b's branch has to skip the check, so
+        # r.suggested_value (the instruction already at the target site) would be
+        # a no-op. Keep whatever reviewed value the profile has; if it has none,
+        # the entry stays pending instead of claiming a patch.
+        if not old_val or "?" in old_val:
+            entry["pending"] = True
+            entry["reason"] = SITE_DEPENDENT_REASON
+            meta["value_needs_review"] = True
+        elif r.value_changed:
+            meta["value_needs_review"] = True
+            meta["value_reason"] = (f"site-dependent: this build's value may differ from the "
+                                    f"profile's {entry.get('value')}")
+        entry["migrated"] = meta
+        return
     if "?" in old_val and r.new_value:
         # template placeholder — fill from the target site word
         entry["value"] = r.new_value
@@ -781,6 +798,23 @@ def _update_entry(entry: dict, r: MatchResult):
             entry["value"] = r.suggested_value
             meta["value_recomputed"] = True
     entry["migrated"] = meta
+
+
+def _entries_needing_review(patches: dict) -> list[str]:
+    """Site-dependent entries whose written value still needs a human/upstream look.
+
+    `_update_entry` flags them in `migrated.value_needs_review` because the
+    fingerprint engine cannot produce the value itself.
+    """
+    found = []
+    for sec, entries in (patches or {}).items():
+        if not isinstance(entries, dict):
+            continue
+        for name, entry in entries.items():
+            meta = entry.get("migrated") if isinstance(entry, dict) else None
+            if isinstance(meta, dict) and meta.get("value_needs_review"):
+                found.append(f"{sec}.{name}")
+    return sorted(found)
 
 
 def _find_entry(entries, name: str) -> dict | None:
@@ -851,6 +885,13 @@ def apply_offsets(target_path: Path, all_results: dict[str, list[MatchResult]],
             say(f"    {C.AMB}{name}{C.NC}")
         say(f"  {C.DIM}review them and write manually, or migrate with --force-low "
             f"to accept the risk{C.NC}")
+    review = _entries_needing_review(patches)
+    if review:
+        say(warn(f"{len(review)} site-dependent entry/entries need a reviewed value "
+                 f"(a value copied from the site would patch nothing):"))
+        for name in review[:10]:
+            say(f"    {C.AMB}{name}{C.NC}")
+        say(f"  {C.DIM}{SITE_DEPENDENT_REASON}{C.NC}")
     dump_profile_yaml(profile, target_path)
     say(ok(f"Offsets written to {target_path}"))
     passed, failed, errors = validate_offsets(target_path)

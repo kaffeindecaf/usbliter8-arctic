@@ -217,6 +217,30 @@ def blocked_sections(filepath: Path) -> list[dict]:
     return blocked_sections_of(data or {})
 
 
+# Entries whose patch value cannot be derived by fingerprinting: an adrp/add pair
+# that has to point at a slot in THIS build, or the branch delta that makes
+# keep_nonce_b skip the nonce check. The engine finds the site and can only offer
+# the instruction already sitting there, i.e. a no-op patch (that is how the iPad
+# profiles ended up "already patched"), so the write paths refuse to fill a value
+# for these and leave it to a reviewed source: upstream's make_cfw.py, a Liter8
+# fixture, or a human with the component.
+SITE_DEPENDENT_ENTRIES = ("boot_args_adrp", "boot_args_add", "keep_nonce_b")
+
+# Why such an entry stays pending even when its offset was located, so every
+# write path and report says the same thing.
+SITE_DEPENDENT_REASON = ("site-dependent immediate (pc-relative adrp/add pair or branch "
+                         "delta): a value copied from this device's own component would be a "
+                         "no-op patch, so it needs upstream/Liter8's value for this build")
+
+
+def is_site_dependent(name: str) -> bool:
+    """True for an entry whose value must not be copied from the target site.
+
+    Accepts a bare entry name ("boot_args_adrp") or a "section.entry" path.
+    """
+    return str(name).rsplit(".", 1)[-1] in SITE_DEPENDENT_ENTRIES
+
+
 def pending_entries(filepath: Path) -> int:
     """Count entries marked `pending: true` (offsets not discovered for this device).
 
