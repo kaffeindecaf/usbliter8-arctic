@@ -38,6 +38,9 @@ SPEC = {
 # never patch these: the research images are unused by a tethered restore and
 # sidecars are metadata, not payloads
 EXCLUDE_TOKENS = ("RESEARCH", ".plist", ".aea", ".root_hash", ".trustcache")
+# this toolkit's own bookkeeping never counts as a component: the pre-patch
+# copies under .ul8-originals/ and the .ul8-build.json marker
+EXCLUDE_PARTS = (".ul8-originals", ".ul8-build.json")
 
 
 def board_short(offsets: dict) -> str:
@@ -96,6 +99,9 @@ def raw_path_for(root: Path | str, kind: str) -> Path | None:
 
 
 def _is_payload(path: Path) -> bool:
+    for part in path.parts:
+        if part in EXCLUDE_PARTS or part.startswith(".ul8"):
+            return False
     return not any(tok in path.name for tok in EXCLUDE_TOKENS)
 
 

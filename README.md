@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-482%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-504%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 12,400 lines of Python in 27 modules, 482 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
+Around 12,400 lines of Python in 27 modules, 504 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -252,6 +252,20 @@ Each entry is classified: `match` (the recorded original bytes are there), `plau
 
 `--record` writes what it verified to `offsets/evidence/<profile>.json` and that file is committed, which makes a profile self-verifying: point it at another board's firmware and it reports `changed` and blocks. Exit codes are 0 for ok or review and 2 for blocked, so CI or a script can gate a restore. Kernelcaches stay `skipped` until you decrypt them with the wiki IV and key. The builder runs this gate before patching and refuses a blocked profile unless you pass `--force`.
 
+## When something goes wrong
+
+A build writes into components a restore hands to a device, so every write is treated as flash-affecting:
+
+- **Every written component is read back and verified.** The build re-opens each file it wrote and proves it unwraps to exactly the patched payload, with the container's own fourcc and description unchanged. The writer is `img4wrap.py` (pure Python, the `img4tool` binary when present), and files land through a temp file + `os.replace`, so a crash or a full disk cannot leave a truncated component behind.
+- **A component that fails its check is rolled back.** The original bytes go back (or, for a file this build created, the file is removed) and its section is marked `failed`. A failed section is a failed build - the summary says so and no component is left half-patched.
+- **A write past the end of a component is refused.** An offset that does not fit is a profile bug; it used to silently grow the payload, which would have flashed a corrupt image. It now fails the section (`PatchOutOfRange`) and nothing is written over it. An entry that cannot be turned into bytes at all (not hex, not a string) is counted as a failed entry instead of ending the build with a traceback.
+- **The bytes that were there before are kept.** `Firmware/dfu/iBSS...` and friends are stashed under `.ul8-originals/` with an index of where they came from, and `python3 cfw_builder.py <tree> --restore-originals` puts the tree back exactly as it was (then drops the build marker, because the tree is no longer the built one).
+- **The build records what it wrote** in `.ul8-build.json`: profile hash, every published component's sha256, and the per-section outcome. `python3 cfw_builder.py <tree> <profile> --verify` re-checks those hashes and the profile's sites, and reports anything it could not check (an encrypted kernelcache, a component this tree does not hold) separately from what it verified. It exits 2 when anything fails, so it can gate a flash.
+- **The restore checks before it erases.** `restore_device()` verifies the work dir first: a tree that no longer matches its marker (stale, hand-edited, or rolled back) makes the restore refuse, with `UL8_FORCE_RESTORE=1` as the deliberate override for a CFW built by hand. A work dir without a marker says so instead of pretending it was checked.
+- **A section that is merely absent is `skipped`, never `failed`.** A missing iBSS, a rootfs that is not extracted, a ramdisk that cannot be patched: all reported, all visible in the manifest and the marker, none of them dressed up as success. The manifest prints `N section(s) NOT fully applied` and the summary tells you to weigh that before flashing.
+
+`tests/test_write_safety.py` pins all of this (21 tests): rollback, removal, fourcc/description preservation, out-of-range refusal, ASCII values still written, the originals round trip (including the out-of-tree CFW iBEC), marker hashing, tamper detection, and that the toolkit's own `.ul8-originals/` and marker are never resolved as components to patch.
+
 ## Patch manifest
 
 `cfw_builder.py` prints what the build actually did: `patched` / `skipped` / `mismatch` / `failed` per section, with the component file each section resolved to. Anything this path cannot apply is reported instead of disappearing:
@@ -350,6 +364,11 @@ python3 ul8.py logs --tail 20 --level ERROR           # what went wrong, from us
 python3 ul8.py logs --grep ipad12p --json             # machine-readable
 python3 ul8.py logs --summary                         # what recent runs cost, slowest steps
 python3 ul8.py share preview                          # the files, branch and bundle that would go back
+
+python3 cfw_builder.py iPhone12,3_27.0b3.ipsw offsets/iPhone12,3_27.0b3.yaml
+python3 cfw_builder.py <tree> <profile> --check-only  # validate every site, write nothing
+python3 cfw_builder.py <tree> <profile> --verify      # re-check a built tree before flashing (exit 2 on anything wrong)
+python3 cfw_builder.py <tree> --restore-originals     # put the pre-patch components of .ul8-originals/ back
 
 python3 device_offsets.py list                        # available offset profiles
 python3 device_offsets.py validate offsets/iPhone12,3_27.0b2.yaml
