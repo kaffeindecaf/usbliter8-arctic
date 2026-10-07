@@ -17,6 +17,14 @@ import log_utils
 
 DRY_RUN = False
 
+# escape hatch for a restore whose tree fails verification: a user who built the
+# CFW by hand can still flash it, but only on purpose
+FORCE_RESTORE_ENV = "UL8_FORCE_RESTORE"
+
+
+def _force_restore_requested() -> bool:
+    return os.environ.get(FORCE_RESTORE_ENV, "").strip().lower() in ("1", "true", "yes")
+
 
 def _run(cmd: list[str], cwd: str | None = None, check: bool = False, env: dict | None = None) -> subprocess.CompletedProcess:
     """Run a command (see toolchain.run), echoing it unless this is a dry run."""
@@ -147,6 +155,45 @@ def restore_device(work_dir: str | Path) -> bool:
         if missing:
             print(err(f"Required files not found in {work_dir}: {', '.join(missing)}"))
             return False
+
+        # fail closed before anything is erased: if this tree was built by
+        # cfw_builder, the components it wrote must still be the ones on disk and
+        # the profile's patch sites must still hold. A stale or hand-edited tree
+        # is not something to flash.
+        try:
+            import cfw_builder
+        except ImportError:
+            cfw_builder = None
+        if cfw_builder is not None:
+            problems, unchecked = [], []
+            if cfw_builder.read_build_marker(work_dir) is None:
+                print(warn("No build marker in this work dir: the CFW was not built (or "
+                           "verified) by cfw_builder, so its patched components cannot be "
+                           "checked before the erase."))
+            else:
+                ok_tree, findings = cfw_builder.verify_tree(work_dir)
+                problems = [f for f in findings if not f.startswith("unchecked:")]
+                unchecked = [f for f in findings if f.startswith("unchecked:")]
+                for line in problems:
+                    print(err(f"  ✗ {line}"))
+                for line in unchecked:
+                    print(warn(f"  ? {line[len('unchecked:'):].strip()}"))
+                if not ok_tree and not _force_restore_requested():
+                    print()
+                    print(err("Refusing to restore: this tree does not match what was built."))
+                    print(f"  {C.DIM}Rebuild it (cfw_builder.py <tree> <profile>) or roll it "
+                          f"back (--restore-originals). To restore anyway, set "
+                          f"{FORCE_RESTORE_ENV}=1 — only do that if you built this tree by "
+                          f"hand and know what is in it.{C.NC}")
+                    log_utils.log_error("restore refused: build verification failed",
+                                       module="boot_chain")
+                    return False
+                if not ok_tree:
+                    print(warn(f"{FORCE_RESTORE_ENV}=1: restoring a tree that failed "
+                               f"verification anyway."))
+                else:
+                    print(ok(f"Build verified: {len(problems)} problem(s)"
+                             f"{f', {len(unchecked)} unchecked section(s)' if unchecked else ''}"))
 
         print(stage(1, "Building custom firmware..."))
         r = _run(["python3", str(make_cfw)], cwd=str(work_dir))

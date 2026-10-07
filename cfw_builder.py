@@ -8,11 +8,15 @@ Supports --dry-run for validation without writing.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import sys
 import subprocess
 import tempfile
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -45,6 +49,32 @@ DEVICETREE_SECTION = "devicetree"                    # dt_patch flags, not offse
 # was actually patched and what was skipped (and why)
 MANIFEST: list[tuple[str, str, str]] = []
 
+# (section, path) of every component this build wrote and verified, in order:
+# the build marker hashes exactly these, not whatever happens to share a name
+PUBLISHED: list[tuple[str, Path]] = []
+
+# entries the current section could not apply (offset past the end of the
+# component, unreadable value) - a section with any of these is failed, never
+# published as "patched"
+PATCH_FAILURES: list[str] = []
+
+# the pre-patch containers of everything this build overwrites, kept inside the
+# IPSW tree so `--restore-originals` can undo a build (components.py never picks
+# them up: they live under a .ul8-* path)
+ORIGINALS_DIRNAME = ".ul8-originals"
+# what this build wrote, by component: the fingerprint a restore can be checked
+# against before it erases a device
+BUILD_MARKER = ".ul8-build.json"
+
+
+class PatchOutOfRange(ValueError):
+    """An entry points past the end of the component it patches.
+
+    Writing it would grow/corrupt the payload instead of patching a site, so the
+    applier refuses it. A silently extended payload is a component the device
+    rejects at best and a half-broken boot chain at worst.
+    """
+
 
 def _note(section: str, status: str, detail: str = "") -> None:
     MANIFEST.append((section, status, detail))
@@ -58,9 +88,503 @@ def _patch_at(fp, offset: int, data: bytes | str):
         current = "??" * len(data)
         print(f"    {C.DIM}[dry-run] offset 0x{offset:X}: {current} → {data.hex()}{C.NC}")
         return
+    fp.seek(0, os.SEEK_END)
+    size = fp.tell()
+    if offset < 0 or offset + len(data) > size:
+        raise PatchOutOfRange(
+            f"0x{offset:X} + {len(data)} B is past the end of the {size:,} B component")
     fp.seek(offset)
     fp.write(data)
     fp.flush()
+
+
+def entry_bytes(value: object) -> bytes:
+    """Patch payload for a profile value: hex, or ASCII for string patches.
+
+    One conversion for the appliers and for the post-write check, so what a build
+    believes it wrote cannot drift from what it verifies. Anything that is
+    neither hex nor a string raises, and every caller counts that as a failed
+    entry rather than letting it end the build.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    try:
+        return device_offsets.hex_to_bytes(value)          # type: ignore[arg-type]
+    except (AttributeError, ValueError, TypeError):
+        if isinstance(value, str):
+            return value.encode("utf-8")
+        raise TypeError(f"{value!r} is neither hex nor a string") from None
+
+
+def section_sites(section_data: dict) -> list[tuple[int, bytes]]:
+    """(offset, bytes) for every appliable entry of a dict section, in order.
+
+    An entry whose value cannot be turned into bytes is left out: the applier
+    already failed the section over it, and the post-write check must not trip on
+    the same entry.
+    """
+    out: list[tuple[int, bytes]] = []
+    for _name, entry in appliable_dict_entries(section_data):
+        try:
+            out.append((entry["offset"], entry_bytes(entry["value"])))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+# ── write safety: never leave behind a component the build cannot vouch for ──
+
+INDEX_NAME = "index.json"
+
+
+def originals_dir(ipsw_dir: str | Path) -> Path:
+    """Where this tree's pre-patch components are kept."""
+    return Path(ipsw_dir) / ORIGINALS_DIRNAME
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Write through a sibling temp file and rename, so no reader sees a partial file.
+
+    A component half-written by a crash (or a full disk) is a brick risk: the
+    device gets a container whose payload is truncated. os.replace is atomic on
+    the same filesystem, so the destination is either the old bytes or all of the
+    new ones.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.ul8tmp{os.getpid()}")
+    try:
+        with open(tmp, "wb") as fp:
+            fp.write(data)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _read_index(store: Path) -> dict:
+    path = store / INDEX_NAME
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _keep_original(dest: Path, original: bytes | None, ipsw_dir: str | Path) -> Path | None:
+    """Stash the bytes that were at `dest` before this build overwrote them.
+
+    The store keeps a name -> relative-path index, so a root-level component
+    (the kernelcache) and a nested one (Firmware/dfu/iBSS...) both restore to
+    exactly where they came from.
+    """
+    if not original:
+        return None
+    tree = Path(ipsw_dir)
+    store = originals_dir(tree)
+    store.mkdir(parents=True, exist_ok=True)
+    absolute = Path(dest).resolve()
+    # the CFW iBEC lives next to the tree, not in it, so the index stores the
+    # real absolute path: a restore must put bytes back where they came from,
+    # never guess from a filename
+    try:
+        rel = absolute.relative_to(tree.resolve())
+        key = str(rel).replace(os.sep, "__")
+    except ValueError:
+        key = f"{hashlib.sha256(str(absolute).encode()).hexdigest()[:16]}__{absolute.name}"
+    out = store / key
+    if not out.exists():                    # first writer wins: never back up our own output
+        _atomic_write(out, original)
+        index = _read_index(store)
+        index[key] = str(absolute)
+        try:
+            _atomic_write(store / INDEX_NAME, json.dumps(index, indent=2).encode())
+        except OSError:                                          # noqa: BLE001
+            pass
+    return out
+
+
+def _rollback(dest: Path, original: bytes | None) -> None:
+    """Undo one component: put the original back, or remove what we created."""
+    try:
+        if original:
+            _atomic_write(dest, original)
+            print(info(f"    restored the original {dest.name}"))
+        elif dest.exists():
+            dest.unlink()
+            print(info(f"    removed the unverified {dest.name}"))
+    except OSError as exc:                                        # noqa: BLE001
+        print(err(f"    rollback failed for {dest.name}: {exc}"))
+        print(f"    {C.DIM}the pre-patch copy is in {dest.parent / ORIGINALS_DIRNAME}{C.NC}")
+
+
+def verify_component(dest: Path, expected_payload: bytes,
+                     sites: Sequence[tuple[int, bytes]] = (),
+                     expect_fourcc: str = "", expect_description: str | None = None) -> str:
+    """Re-read a written component and prove it is the patched payload.
+
+    Returns "" when the file on disk is exactly the payload the build intended in
+    the container shape it came from, else a one-line reason. This is the last
+    guard before a user flashes the tree: the bytes we are about to hand to a
+    restore must be the bytes the profile asked for.
+    """
+    try:
+        import img4wrap
+
+        result = img4wrap.unwrap_file(dest)
+    except Exception as exc:                                      # noqa: BLE001
+        return f"cannot read the written component back: {exc}"
+    if result.encrypted:
+        return "the written component reads back as encrypted"
+    if len(result.payload) != len(expected_payload):
+        return (f"payload length is {len(result.payload):,} B, expected "
+                f"{len(expected_payload):,} B")
+    if result.payload != expected_payload:
+        return "payload is not the patched bytes"
+    if expect_fourcc and result.fourcc and result.fourcc != expect_fourcc:
+        return f"container fourcc changed to {result.fourcc!r}"
+    if expect_description is not None and result.description != expect_description:
+        return f"container description changed to {result.description!r}"
+    for offset, want in sites:
+        got = result.payload[offset:offset + len(want)]
+        if got != want:
+            return f"site 0x{offset:X} holds {got.hex()} instead of {want.hex()}"
+    return ""
+
+
+def verify_binary(path: Path, expected_size: int, sites: Sequence[tuple[int, bytes]] = ()) -> str:
+    """Check a binary patched in place: same size, and every site holds its value.
+
+    Used for the rootfs daemons, which are not containers and have no rewrap step
+    to lean on.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return f"cannot read back: {exc}"
+    if len(data) != expected_size:
+        return f"size changed from {expected_size:,} B to {len(data):,} B"
+    for offset, want in sites:
+        got = data[offset:offset + len(want)]
+        if got != want:
+            return f"site 0x{offset:X} holds {got.hex()} instead of {want.hex()}"
+    return ""
+
+
+def encode_component(raw_path: Path, dest: Path, tag: str) -> tuple[bytes | None, str]:
+    """Container bytes for a patched payload, plus how they were produced.
+
+    img4tool first (it keeps Apple's metadata by rewriting the existing file),
+    then the in-tree pure-Python writer, which carries the original description
+    over on a rewrap.
+    """
+    if toolchain.tool_available("img4tool"):
+        work = Path(tempfile.mkdtemp(prefix="ul8_wrap_", dir=str(dest.parent if dest.parent.is_dir()
+                                                                else Path(tempfile.gettempdir()))))
+        staging = work / dest.name
+        if dest.exists():
+            shutil.copy2(dest, staging)          # img4tool updates an existing container
+        cmd = ([toolchain.tool("img4tool"), "-c", str(staging), "-t", tag, str(raw_path)] if tag
+               else [toolchain.tool("img4tool"), "-c", str(staging), str(raw_path)])
+        try:
+            if _run(cmd).returncode == 0 and staging.exists():
+                return staging.read_bytes(), "img4tool"
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    try:
+        import img4wrap
+    except ImportError as exc:                                    # noqa: BLE001
+        return None, f"no IMG4 writer available: {exc}"
+    description = ""
+    fourcc = ""
+    if dest.exists():                            # keep Apple's metadata on rewrap
+        try:
+            previous = img4wrap.unwrap_file(dest)
+            description = previous.description
+            fourcc = previous.fourcc
+        except Exception:                                         # noqa: BLE001
+            description = fourcc = ""
+    if not tag and not fourcc:
+        # never invent a fourcc: a real container carries the one the device and
+        # the restore expect (kernelcache is "krnl", not "IM4P")
+        return None, "no container tag given and no existing container to copy it from"
+    try:
+        # an existing container's own fourcc wins: it is what the device reads
+        return img4wrap.wrap(raw_path.read_bytes(), fourcc or tag, description), "img4wrap"
+    except Exception as exc:                                      # noqa: BLE001
+        return None, str(exc)
+
+
+def publish_component(dest: str | Path, raw_path: str | Path, tag: str, section: str,
+                      sites: Sequence[tuple[int, bytes]] = (), *, ipsw_dir: str | Path,
+                      original: bytes | None = None, expect_description: str | None = None) -> bool:
+    """Publish a patched component: encode, write atomically, verify, roll back.
+
+    The single place that puts patched bytes into a tree. If the file on disk is
+    not provably the patched payload, the original goes back (or the file we
+    created is removed) and the section fails, so a build can never hand a
+    restore a tree it cannot vouch for.
+    """
+    dest = Path(dest)
+    payload = Path(raw_path).read_bytes()
+    # the shape the file has to keep: what was there before the build (fourcc and
+    # description come from Apple's container, never from us)
+    shape = _shape_of(original)
+    data, how = encode_component(Path(raw_path), dest, tag)
+    if data is None:
+        print(err(f"cannot wrap {dest.name}: {how}"))
+        _note(section, "failed", f"wrap: {how}")
+        return False
+
+    kept = _keep_original(dest, original, ipsw_dir)
+    _atomic_write(dest, data)
+    if VERBOSE:
+        print(f"    {C.DIM}wrote {dest.name} ({len(data):,} B, {how}){C.NC}")
+
+    problem = verify_component(dest, payload, sites,
+                               expect_fourcc=shape.get("fourcc", ""),
+                               expect_description=expect_description
+                               if expect_description is not None else shape.get("description"))
+    if problem:
+        print(err(f"{section}: {dest.name} did not verify ({problem}) — rolling back"))
+        _rollback(dest, original)
+        _note(section, "failed", f"verify: {problem}")
+        return False
+
+    if kept is not None:
+        try:
+            kept_rel = str(kept.relative_to(Path(ipsw_dir)))
+        except ValueError:
+            kept_rel = str(kept)                # an out-of-tree component's backup
+        _note(f"{section}.backup", "kept", kept_rel)
+    PUBLISHED.append((section, dest))
+    return True
+
+
+def _shape_of(original: bytes | None) -> dict:
+    """fourcc/description of the container this build is about to overwrite."""
+    if not original:
+        return {}
+    try:
+        import img4wrap
+
+        if not img4wrap.looks_like_container(original):
+            return {}
+        unwrapped = img4wrap.unwrap(original)
+        return {"fourcc": unwrapped.fourcc, "description": unwrapped.description}
+    except Exception:                                             # noqa: BLE001
+        return {}
+
+
+def restore_originals(ipsw_dir: str | Path) -> int:
+    """Undo a build: put every stashed pre-patch component back. Returns the count."""
+    store = originals_dir(ipsw_dir)
+    if not store.is_dir():
+        print(warn(f"no {ORIGINALS_DIRNAME}/ in {ipsw_dir} — nothing to restore"))
+        return 0
+    restored = 0
+    index = _read_index(store)
+    for kept in sorted(store.iterdir()):
+        if not kept.is_file() or kept.name == INDEX_NAME:
+            continue
+        if kept.name in index:
+            target = Path(index[kept.name])
+        else:                                # store from an older build: name only
+            target = Path(ipsw_dir) / kept.name.replace("__", os.sep)
+        if not target.parent.is_dir():
+            target.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(target, kept.read_bytes())
+        restored += 1
+        print(ok(f"restored {target}"))
+    if restored:
+        # the tree is no longer what the marker describes: drop it, so a later
+        # --verify cannot pass a tree that has been rolled back
+        marker_path(ipsw_dir).unlink(missing_ok=True)
+        print(info("removed the build marker: this tree is back to its pre-build state"))
+    return restored
+
+
+# ── the build marker: what a tree is, so a restore can be gated on it ──
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fp:
+        for chunk in iter(lambda: fp.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def marker_path(ipsw_dir: str | Path) -> Path:
+    return Path(ipsw_dir) / BUILD_MARKER
+
+
+def write_build_marker(ipsw_dir: str | Path, offsets_path: Path, offsets: dict) -> Path | None:
+    """Record what this build wrote, next to the tree it wrote it into.
+
+    A restore that erases a device should be able to answer "is this the tree the
+    profile produced?" without trusting a filename. The marker carries the
+    profile's hash, every patched component's hash and the per-section outcome,
+    so `--verify` can tell a good tree from a stale or hand-edited one.
+    """
+    ipsw_dir = Path(ipsw_dir)
+    published = [m for m in MANIFEST if m[1] in ("patched", "partial")]
+    components: list[dict] = []
+    seen: set[str] = set()
+    for pub_section, path in PUBLISHED:              # exact paths the build wrote
+        if not path.is_file():
+            continue
+        try:
+            rel = path.resolve().relative_to(ipsw_dir.resolve())
+            record = {"path": str(rel), "outside_tree": False}
+        except ValueError:
+            # the CFW iBEC is written next to the tree; a restore uses it, so it
+            # has to be in the record even though it is not under ipsw_dir
+            record = {"path": str(path.resolve()), "outside_tree": True}
+        if record["path"] in seen:
+            continue
+        seen.add(record["path"])
+        components.append({
+            "section": pub_section,
+            **record,
+            "sha256": _sha256(path),
+            "size": path.stat().st_size,
+        })
+    marker = {
+        "tool": "usbliter8-arctic cfw_builder",
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "profile": str(Path(offsets_path).name),
+        "profile_sha256": _sha256(Path(offsets_path)),
+        "model": offsets.get("model", ""),
+        "ios_version": offsets.get("ios_version", ""),
+        "build": offsets.get("build", ""),
+        "sections": [{"section": s, "status": st, "detail": d} for s, st, d in MANIFEST],
+        "components": components,
+        "fully_applied": not [m for m in MANIFEST if m[1] in ("failed", "mismatch", "skipped")],
+        "patched_sections": len(published),
+    }
+    try:
+        _atomic_write(marker_path(ipsw_dir), json.dumps(marker, indent=2).encode())
+    except OSError as exc:                                        # noqa: BLE001
+        print(warn(f"could not write {BUILD_MARKER}: {exc}"))
+        return None
+    return marker_path(ipsw_dir)
+
+
+def read_build_marker(ipsw_dir: str | Path) -> dict | None:
+    path = marker_path(ipsw_dir)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def check_sites(dest: Path, sites: Sequence[tuple[int, bytes]]) -> str:
+    """Are every one of the profile's sites present in this component? "" if yes."""
+    try:
+        import img4wrap
+
+        payload = img4wrap.payload_of(dest)
+    except Exception as exc:                                      # noqa: BLE001
+        return f"cannot read {dest.name}: {exc}"
+    for offset, want in sites:
+        got = payload[offset:offset + len(want)]
+        if got != want:
+            return f"{dest.name}: site 0x{offset:X} holds {got.hex()} instead of {want.hex()}"
+    return ""
+
+
+def verify_tree(ipsw_dir: str | Path, profile_path: Path | None = None) -> tuple[bool, list[str]]:
+    """Check a built tree before a restore: marker hashes, then the profile's sites.
+
+    Returns (ok, problems). Anything this cannot check (encrypted components, a
+    component that is not in the tree) is reported as an unchecked section, never
+    as a pass: a flash decision has to know what was left unverified.
+    """
+    ipsw_dir = Path(ipsw_dir)
+    problems: list[str] = []
+    unchecked: list[str] = []
+
+    marker = read_build_marker(ipsw_dir)
+    if marker is None:
+        unchecked.append(f"no {BUILD_MARKER} in {ipsw_dir}: the tree was not built here "
+                         f"(or the marker was removed), so only the profile is checked")
+    else:
+        for component in marker.get("components", []):
+            if component.get("outside_tree"):
+                path = Path(str(component.get("path", "")))
+            else:
+                path = ipsw_dir / str(component.get("path", ""))
+            if not path.is_file():
+                problems.append(f"missing component {component.get('path')} "
+                                f"(section {component.get('section')})")
+                continue
+            if _sha256(path) != component.get("sha256"):
+                problems.append(f"{component.get('path')} changed since the build "
+                                f"(section {component.get('section')})")
+        for entry in marker.get("sections", []):
+            if entry.get("status") in ("failed", "mismatch"):
+                problems.append(f"section {entry.get('section')} was {entry.get('status')}: "
+                                f"{str(entry.get('detail', ''))[:100]}")
+        if marker.get("profile_sha256") and profile_path and Path(profile_path).is_file():
+            if _sha256(Path(profile_path)) != marker["profile_sha256"]:
+                problems.append(f"the profile has changed since this tree was built "
+                                f"({Path(profile_path).name})")
+
+    if profile_path is None and marker:
+        recorded = marker.get("profile", "")
+        candidate = Path(recorded)
+        if candidate.is_file():
+            profile_path = candidate
+    if profile_path is None or not Path(profile_path).is_file():
+        if not problems:
+            unchecked.append("no profile given: only the marker hashes were checked")
+        return (not problems, problems + [f"unchecked: {u}" for u in unchecked])
+
+    offsets = yaml.safe_load(Path(profile_path).read_text()) or {}
+    written: dict[str, list[Path]] = {}
+    if marker:
+        for component in marker.get("components", []):
+            path = (Path(str(component.get("path", ""))) if component.get("outside_tree")
+                    else ipsw_dir / str(component.get("path", "")))
+            written.setdefault(str(component.get("section")), []).append(path)
+    for sec_name, data in (offsets.get("patches") or {}).items():
+        if sec_name == KERNEL_SECTION:
+            entries = [e for e in data if isinstance(e, dict) and "offset" in e and "value" in e]
+            sites = []
+            for entry in entries:
+                try:
+                    sites.append((entry["offset"], entry_bytes(entry["value"])))
+                except (TypeError, ValueError):
+                    continue
+        elif sec_name == DAEMONS_SECTION:
+            continue                       # rootfs binaries, not in the tree
+        elif isinstance(data, dict) and sec_name in DICT_SECTIONS:
+            sites = section_sites(data)
+        else:
+            continue
+        if not sites:
+            continue
+        kind = "kernelcache" if sec_name == KERNEL_SECTION else sec_name
+        src, _cands, reason = components.find_component(ipsw_dir, kind, offsets)
+        if src is None:
+            unchecked.append(f"{sec_name}: {reason}")
+            continue
+        known = [p for p in written.get(sec_name, []) if p.resolve() == Path(src).resolve()]
+        if written.get(sec_name) and not known:
+            problems.append(f"{sec_name}: this tree resolves to {src}, but the build patched "
+                            f"{', '.join(str(p) for p in written[sec_name])} — a restore "
+                            f"would use bytes the build did not verify")
+            continue
+        problem = check_sites(src, sites)
+        if problem:
+            problems.append(problem)
+
+    return (not problems, problems + [f"unchecked: {u}" for u in unchecked])
 
 
 def _board_config(offsets: dict) -> str:
@@ -153,20 +677,51 @@ def appliable_dict_entries(section_data: dict) -> list[tuple[str, dict]]:
 
 
 def _apply_dict_patches(fp, patches: dict, section_name: str) -> int:
-    """Apply all offset/value patches from a dict section. Returns count of applied patches."""
+    """Apply all offset/value patches from a dict section. Returns count of applied patches.
+
+    An entry whose value cannot be read or whose site is past the end of the
+    component is recorded in PATCH_FAILURES and skipped: the caller fails the
+    section instead of publishing a partially patched component.
+    """
     count = 0
     for name, entry in appliable_dict_entries(patches):
         off = entry["offset"]
         val = entry["value"]
         try:
-            data = device_offsets.hex_to_bytes(val)
+            data = entry_bytes(val)
+        except (TypeError, ValueError):
+            # a value the profile carries but nothing can turn into bytes: count
+            # it as a failure, never let it take the whole build down
+            PATCH_FAILURES.append(f"{section_name}.{name}: value {val!r} is not writable")
+            print(err(f"    {section_name}.{name}: value {val!r} is not writable"))
+            continue
+        try:
+            _patch_at(fp, off, data)
+        except PatchOutOfRange as exc:
+            PATCH_FAILURES.append(f"{section_name}.{name}: {exc}")
+            print(err(f"    {section_name}.{name}: {exc} — NOT patched"))
+            continue
         except ValueError:
-            data = val  # string for boot-args
-        _patch_at(fp, off, data)
+            PATCH_FAILURES.append(f"{section_name}.{name}: invalid value {val!r}")
+            print(err(f"    {section_name}.{name}: invalid value {val!r}"))
+            continue
         count += 1
         if VERBOSE:
             print(f"    {C.GRN}✓{C.NC} {section_name}.{name} @ 0x{off:X}")
     return count
+
+
+def _section_failed(section: str) -> bool:
+    """True when this section hit an entry it could not apply."""
+    if not PATCH_FAILURES:
+        return False
+    print(err(f"{section}: {len(PATCH_FAILURES)} entry/entries NOT applied — "
+              f"refusing to write a partially patched component"))
+    for line in PATCH_FAILURES[:8]:
+        print(f"    {C.RED}{line}{C.NC}")
+    _note(section, "failed", PATCH_FAILURES[0])
+    PATCH_FAILURES.clear()
+    return True
 
 
 def patch_ibss(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
@@ -178,27 +733,35 @@ def patch_ibss(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> boo
                                                        force=FORCE_COMPONENT)
     if src is None:
         print(err(f"iBSS not found for {offsets.get('model', '?')}: {reason}"))
-        _note("ibss", "failed", reason)
-        return False
+        _note("ibss", "skipped", reason)
+        return True
     if reason == "forced":
         print(warn(f"iBSS: several candidates, using {src.name}"))
     print(f"    {C.DIM}component: {src.name} ({components.component_stem(offsets, 'ibss')}){C.NC}")
 
     raw = Path(work_dir) / "iBSS.raw"
+    original = src.read_bytes()          # the bytes at the destination before this build
     if not _extract_im4p_to_raw(src, raw):
         print(err("Failed to extract iBSS"))
         _note("ibss", "failed", "extract")
         return False
 
+    PATCH_FAILURES.clear()
     with open(raw, "r+b") as fp:
         count = _apply_dict_patches(fp, ibss_patches, "ibss")
-    _note("ibss", "patched", f"{count} entries → {src.name}")
+    if _section_failed("ibss"):
+        return False
 
     if DRY_RUN:
+        _note("ibss", "patched", f"{count} entries → {src.name}")
         return True
 
     dest = Path(ipsw_dir) / "Firmware" / "dfu" / src.name
-    return _wrap_raw_to_im4p(raw, dest, "ibss")
+    published = publish_component(dest, raw, "ibss", "ibss", section_sites(ibss_patches),
+                                  ipsw_dir=ipsw_dir, original=original)
+    if published:
+        _note("ibss", "patched", f"{count} entries → {src.name}")
+    return published
 
 
 def patch_ibec(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
@@ -217,25 +780,36 @@ def patch_ibec(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> boo
             break
     if src is None:
         print(err(f"iBEC not found for {offsets.get('model', '?')}: {reason}"))
-        _note("ibec", "failed", reason)
-        return False
+        _note("ibec", "skipped", reason)
+        return True
 
     raw = Path(work_dir) / "iBEC.raw"
+    # the CFW iBEC is ours: no original bytes to keep or roll back
     if not _extract_im4p_to_raw(src, raw):
         print(err("Failed to extract iBEC"))
         _note("ibec", "failed", "extract")
         return False
 
+    PATCH_FAILURES.clear()
     with open(raw, "r+b") as fp:
         count = _apply_dict_patches(fp, ibec_patches, "ibec")
-    _note("ibec", "patched", f"{count} entries → {src.name}")
+    if _section_failed("ibec"):
+        return False
 
     if DRY_RUN:
+        _note("ibec", "patched", f"{count} entries → {src.name}")
         return True
 
     dest = cfw_dir / src.name
     cfw_dir.mkdir(parents=True, exist_ok=True)
-    return _wrap_raw_to_im4p(raw, dest, "ibec")
+    # the CFW dir is a copy of the tree's iBEC, so the original is what is there
+    # now (nothing, on a first build): no rollback bytes, the file we create is
+    # removed again if it does not verify
+    published = publish_component(dest, raw, "ibec", "ibec", section_sites(ibec_patches),
+                                  ipsw_dir=ipsw_dir, original=None)
+    if published:
+        _note("ibec", "patched", f"{count} entries → {src.name}")
+    return published
 
 
 def patch_devicetree(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
@@ -247,10 +821,11 @@ def patch_devicetree(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) 
                                                         force=FORCE_COMPONENT)
     if src is None:
         print(err(f"DeviceTree not found for {offsets.get('model', '?')}: {reason}"))
-        _note("devicetree", "failed", reason)
-        return False
+        _note("devicetree", "skipped", reason)
+        return True
 
     raw = Path(work_dir) / "DeviceTree.raw"
+    original = src.read_bytes()
     if not _extract_im4p_to_raw(src, raw):
         print(err("Failed to extract DeviceTree"))
         _note("devicetree", "failed", "extract")
@@ -264,16 +839,20 @@ def patch_devicetree(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) 
     Path(raw).write_bytes(patched)
     failed = [f"{op}={status}" for op, status in report
               if status.startswith("node-not-found")]
-    _note("devicetree", "patched" if not failed else "partial",
-          ", ".join(f"{op}: {status}" for op, status in report) or "no flags set")
+    detail = ", ".join(f"{op}: {status}" for op, status in report) or "no flags set"
     if failed:
         print(warn(f"DeviceTree: {', '.join(failed)}"))
 
     if DRY_RUN:
+        _note("devicetree", "patched" if not failed else "partial", detail)
         return True
 
     dest = Path(ipsw_dir) / "Firmware" / "all_flash" / src.name
-    return _wrap_raw_to_im4p(raw, dest, "dtre")
+    published = publish_component(dest, raw, "dtre", "devicetree", (),
+                                  ipsw_dir=ipsw_dir, original=original)
+    if published:
+        _note("devicetree", "patched" if not failed else "partial", detail)
+    return published
 
 
 def blocked_entry(offsets: dict, section: str) -> dict | None:
@@ -320,20 +899,29 @@ def patch_txm(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool
     print(f"    {C.DIM}component: {src.name}{C.NC}")
 
     raw = Path(work_dir) / "TXM.raw"
+    original = src.read_bytes()
     if not _extract_im4p_to_raw(src, raw):
         print(err("Failed to extract TXM"))
         _note(TXM_SECTION, "failed", "extract")
         return False
 
+    PATCH_FAILURES.clear()
     with open(raw, "r+b") as fp:
         count = _apply_dict_patches(fp, txm_patches, TXM_SECTION)
-    _note(TXM_SECTION, "patched", f"{count} entries → {src.name}")
+    if _section_failed(TXM_SECTION):
+        return False
 
     if DRY_RUN:
+        _note(TXM_SECTION, "patched", f"{count} entries → {src.name}")
         return True
 
     dest = Path(ipsw_dir) / "Firmware" / src.name
-    return _wrap_raw_to_im4p(raw, dest, TXM_FOURCC)
+    published = publish_component(dest, raw, TXM_FOURCC, TXM_SECTION,
+                                  section_sites(txm_patches),
+                                  ipsw_dir=ipsw_dir, original=original)
+    if published:
+        _note(TXM_SECTION, "patched", f"{count} entries → {src.name}")
+    return published
 
 
 def appliable_kernel_entries(kernel_patches: list) -> tuple[list, list]:
@@ -376,6 +964,7 @@ def patch_kernel(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> b
     print(f"    {C.DIM}component: {src.name}{C.NC}")
 
     raw = Path(work_dir) / "kernelcache.raw"
+    original = src.read_bytes()
     if not _extract_im4p_to_raw(src, raw):
         print(err("Failed to extract kernelcache (decryption needs the wiki IV+key)"))
         _note("kernel", "failed", "extract")
@@ -397,35 +986,48 @@ def patch_kernel(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> b
         print(f"    {C.DIM}{invalid[0].get('reason', '')}{C.NC}")
         _note("kernel", "skipped",
               f"{len(invalid)} invalid-component entries (not applied)")
+    PATCH_FAILURES.clear()
+    sites: list[tuple[int, bytes]] = []
     with open(raw, "r+b") as fp:
-        for entry in kernel_patches:
-            if isinstance(entry, dict) and entry.get("invalid_component"):
+        for entry in _appliable:
+            off = entry["offset"]
+            name = entry.get("name", "kernel")
+            try:
+                data = entry_bytes(entry["value"])
+            except (TypeError, ValueError):
+                PATCH_FAILURES.append(f"kernel.{name}: value {entry['value']!r} is not writable")
+                print(err(f"    kernel.{name}: value {entry['value']!r} is not writable"))
                 continue
-            if isinstance(entry, dict) and "offset" in entry and "value" in entry:
-                off = entry["offset"]
-                val = entry["value"]
-                name = entry.get("name", "kernel")
-                try:
-                    try:
-                        data = device_offsets.hex_to_bytes(val)
-                    except ValueError:
-                        # ASCII payloads (e.g. the kernel identity string
-                        # "/PATCHED_ARM64_T8030") are written verbatim
-                        data = val.encode() if isinstance(val, str) else bytes(val)
-                    _patch_at(fp, off, data)
-                    count += 1
-                    if VERBOSE:
-                        print(f"    {C.GRN}✓{C.NC} {name} @ 0x{off:X}")
-                except ValueError:
-                    print(err(f"Invalid hex for {name}: {val}"))
+            try:
+                _patch_at(fp, off, data)
+            except PatchOutOfRange as exc:
+                PATCH_FAILURES.append(f"kernel.{name}: {exc}")
+                print(err(f"    kernel.{name}: {exc} — NOT patched"))
+                continue
+            except ValueError:
+                PATCH_FAILURES.append(f"kernel.{name}: invalid value {entry['value']!r}")
+                print(err(f"    kernel.{name}: invalid value {entry['value']!r}"))
+                continue
+            count += 1
+            sites.append((off, data))
+            if VERBOSE:
+                print(f"    {C.GRN}✓{C.NC} {name} @ 0x{off:X}")
+
+    if _section_failed("kernel"):
+        return False
 
     print(ok(f"Kernel: {count} patches applied"))
-    _note("kernel", "patched", f"{count} entries → {src.name}")
 
     if DRY_RUN:
+        _note("kernel", "patched", f"{count} entries → {src.name}")
         return True
 
-    return _wrap_raw_to_im4p(raw, src)
+    # in place: the kernelcache the restore picks up must be the patched one
+    published = publish_component(src, raw, "krnl", "kernel", sites,
+                                  ipsw_dir=ipsw_dir, original=original)
+    if published:
+        _note("kernel", "patched", f"{count} entries → {src.name}")
+    return published
 
 
 def patch_restoreramdisk(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
@@ -462,21 +1064,25 @@ def patch_restoreramdisk(ipsw_dir: str | Path, offsets: dict, work_dir: str | Pa
         return True
 
     raw = Path(work_dir) / "RestoreRamdisk.raw"
+    original = src.read_bytes()
     if not _extract_im4p_to_raw(src, raw):
         print(err("Failed to extract RestoreRamdisk — cannot patch im4p at raw offsets"))
         _note("restoreramdisk", "failed", "extract")
         return False
 
+    PATCH_FAILURES.clear()
     with open(raw, "r+b") as fp:
         applied = _apply_dict_patches(fp, rd_patches, "restoreramdisk")
+    if _section_failed("restoreramdisk"):
+        return False
 
     if DRY_RUN:
         _note("restoreramdisk", "patched", f"{applied} entries → {src.name}")
         return True
 
-    if not _wrap_raw_to_im4p(raw, src, "rdsk"):
+    if not publish_component(src, raw, "rdsk", "restoreramdisk", section_sites(rd_patches),
+                             ipsw_dir=ipsw_dir, original=original):
         print(err("Failed to rewrap RestoreRamdisk"))
-        _note("restoreramdisk", "failed", "rewrap")
         return False
 
     print(ok(f"RestoreRamdisk: {applied} patches applied and re-wrapped into IPSW"))
@@ -522,18 +1128,42 @@ def patch_userland(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) ->
             missing.append(daemon_name)
             continue
 
+        original = binary_path.read_bytes()      # in place: keep the pre-patch binary
+        sites: list[tuple[int, bytes]] = []
         with open(binary_path, "r+b") as fp:
             for name, entry in appliable_dict_entries(patches):
                 off = entry["offset"]
-                val = entry["value"]
+                data = entry_bytes(entry["value"])
                 try:
-                    data = device_offsets.hex_to_bytes(val)
                     _patch_at(fp, off, data)
-                    count += 1
-                    if VERBOSE:
-                        print(f"    {C.GRN}✓{C.NC} {daemon_name}.{name} @ 0x{off:X}")
+                except PatchOutOfRange as exc:
+                    PATCH_FAILURES.append(f"{daemon_name}.{name}: {exc}")
+                    print(err(f"    {daemon_name}.{name}: {exc} — NOT patched"))
+                    continue
                 except ValueError:
-                    print(err(f"Invalid hex for {daemon_name}.{name}: {val}"))
+                    PATCH_FAILURES.append(f"{daemon_name}.{name}: invalid value "
+                                          f"{entry['value']!r}")
+                    print(err(f"    {daemon_name}.{name}: invalid value {entry['value']!r}"))
+                    continue
+                count += 1
+                sites.append((off, data))
+                if VERBOSE:
+                    print(f"    {C.GRN}✓{C.NC} {daemon_name}.{name} @ 0x{off:X}")
+
+        problem = verify_binary(binary_path, len(original), sites)
+        if problem:
+            print(err(f"{daemon_name}: {problem} — restoring the original binary"))
+            _atomic_write(binary_path, original)
+            PATCH_FAILURES.append(f"{daemon_name}: {problem}")
+            continue
+
+    if PATCH_FAILURES:
+        print(err(f"daemons: {len(PATCH_FAILURES)} entry/entries NOT applied"))
+        for line in PATCH_FAILURES[:8]:
+            print(f"    {C.RED}{line}{C.NC}")
+        _note("daemons", "failed", PATCH_FAILURES[0])
+        PATCH_FAILURES.clear()
+        return False
 
     if missing:
         print(err(f"Daemon binaries not found in extracted IPSW: {', '.join(missing)}"))
@@ -541,9 +1171,14 @@ def patch_userland(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) ->
                    "rootfs first (work-dir make_cfw.py toolchain or 7z), or "
                    "remove the 'daemons' section if these patches are applied "
                    "elsewhere."))
-        return False
+        # not a build failure: this tree simply has no rootfs to patch. The
+        # manifest says so and the pre-flash check lists it as not applied.
+        _note("daemons", "skipped",
+              f"binaries not in this tree: {', '.join(missing)}")
+        return True
 
     print(ok(f"Userland: {count} daemon patches applied"))
+    _note("daemons", "patched", f"{count} entries in {len(binaries)} binaries")
     return True
 
 
@@ -768,6 +1403,7 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
             print()
 
         MANIFEST.clear()
+        PUBLISHED.clear()
         with open(offsets_path) as f:
             offsets = yaml.safe_load(f)
 
@@ -887,6 +1523,7 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
 
         if ok_patch:
             blocked = [m for m in MANIFEST if m[1] in ("skipped", "mismatch", "failed")]
+            marker = write_build_marker(ipsw_dir, offsets_path, offsets) if not DRY_RUN else None
             print()
             print(f"  {C.GRN}{'═' * 56}{C.NC}")
             if blocked:
@@ -895,6 +1532,13 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
                 print(f"  {C.GRN}  Custom firmware built successfully!{C.NC}")
             print(f"  {C.GRN}  Patched IPSW at: {ipsw_dir}{C.NC}")
             print(f"  {C.GRN}{'═' * 56}{C.NC}")
+            if marker is not None:
+                print(f"  {C.DIM}  every patched component was re-read and verified; "
+                      f"{marker.name} records the hashes{C.NC}")
+                print(f"  {C.DIM}  check before flashing: python3 cfw_builder.py {ipsw_dir} "
+                      f"{offsets_path} --verify{C.NC}")
+                print(f"  {C.DIM}  undo this build: python3 cfw_builder.py {ipsw_dir} "
+                      f"--restore-originals{C.NC}")
             if blocked:
                 print()
                 print(warn("Do not restore this build blindly: the sections above were skipped "
@@ -904,6 +1548,8 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
         else:
             print()
             print(err("CFW build had errors — check output above"))
+            print(f"  {C.DIM}any component that failed its post-write check was rolled back; "
+                  f"the pre-patch copies are in {ORIGINALS_DIRNAME}/{C.NC}")
             return False
 
 
@@ -933,9 +1579,51 @@ def _cli() -> int:
         VERBOSE = False
         args = [a for a in args if a not in ("--quiet", "-q")]
 
+    # verification / undo modes: they never patch anything
+    verify_mode = "--verify" in args
+    restore_mode = "--restore-originals" in args
+    args = [a for a in args if a not in ("--verify", "--restore-originals")]
+
+    if restore_mode:
+        if not args:
+            print(err("usage: cfw_builder.py <ipsw_dir> --restore-originals"))
+            return log_utils.EXIT_ERROR
+        target = Path(args[0])
+        if not target.is_dir():
+            print(err(f"{target} is not a directory (an extracted IPSW tree is needed)"))
+            return log_utils.EXIT_ERROR
+        restored = restore_originals(target)
+        return log_utils.EXIT_OK if restored else log_utils.EXIT_ERROR
+
+    if verify_mode:
+        if not args:
+            print(err("usage: cfw_builder.py <ipsw_dir> [profile.yaml] --verify"))
+            return log_utils.EXIT_ERROR
+        target = Path(args[0])
+        profile = Path(args[1]) if len(args) > 1 else None
+        print(section("Verify a built tree"))
+        ok_verify, findings = verify_tree(target, profile)
+        for line in findings:
+            if line.startswith("unchecked:"):
+                print(warn(f"  ? {line[len('unchecked:'):].strip()}"))
+            else:
+                print(err(f"  ✗ {line}"))
+        if ok_verify:
+            unchecked = [line for line in findings if line.startswith("unchecked:")]
+            print(ok(f"  verified: {target} holds the patches this profile asks for"))
+            if unchecked:
+                print(warn(f"  {len(unchecked)} section(s) could not be checked "
+                           f"(listed above) — weigh those before flashing"))
+        else:
+            print(err("  do NOT flash this tree: the checks above failed"))
+        return log_utils.EXIT_OK if ok_verify else log_utils.EXIT_BLOCKED
+
     if len(args) < 2:
         print(f"  Usage: {C.FROST}python3 cfw_builder.py <ipsw_path> <offsets.yaml> [--dry-run|--check-only] [--quiet]{C.NC}")
         print(f"  Flags: --check-only    Validate every patch site without extracting the IPSW")
+        print(f"         --verify        Check a built tree against its build marker + profile "
+              f"(no patching)")
+        print(f"         --restore-originals  Put the pre-patch components of {ORIGINALS_DIRNAME}/ back")
         print(f"         --quiet         Suppress per-patch output")
         print(f"         --force         Build even when preflight fails (NOT recommended)")
         print(f"         --force-component  Use the first component when several match")
