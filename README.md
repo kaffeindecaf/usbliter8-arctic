@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-462%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-478%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 12,200 lines of Python in 27 modules, 462 tests. Two pip packages cover the basics (pyusb, pyyaml). pyimg4 is only needed to read firmware components off macOS, and capstone only for beta migration.
+Around 12,400 lines of Python in 27 modules, 478 tests. Two pip packages cover the basics (pyusb, pyyaml). pyimg4 is only needed to read firmware components off macOS, and capstone only for beta migration.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
