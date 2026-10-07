@@ -1,7 +1,7 @@
 """Custom firmware builder for usbliter8-arctic.
 
 Takes an IPSW + device offset YAML, produces patched iBSS, iBEC,
-DeviceTree, kernel, RestoreRamdisk, and userland binaries.
+DeviceTree, TXM, kernel, RestoreRamdisk, and userland binaries.
 
 Supports --dry-run for validation without writing.
 """
@@ -29,9 +29,15 @@ VERBOSE = True
 FORCE = False          # --force: build despite failed preflight / pending entries
 FORCE_COMPONENT = False  # --force-component: take the first component when several match
 # which profile sections this build path writes, and how. Anything else in a
-# profile (the `txm` section today) is reported as unpatched instead of being
-# dropped silently by the dry run.
-DICT_SECTIONS = ("ibss", "ibec", "restoreramdisk")   # _apply_dict_patches
+# profile is reported as unpatched instead of being dropped silently by the dry
+# run. `txm` used to be that section: the profiles carry it, upstream patches
+# it, and nothing here applied it (every CFW booted with module validation
+# intact), so it has a patcher now.
+TXM_SECTION = "txm"                                  # patch_txm
+DICT_SECTIONS = ("ibss", "ibec", TXM_SECTION, "restoreramdisk")  # _apply_dict_patches
+# the fourcc Apple wraps the TXM payload in (verified against iPhone12,3
+# 24A5380h: Firmware/txm.iphoneos.release.im4p = fourcc "trxm", description "1")
+TXM_FOURCC = "trxm"
 KERNEL_SECTION = "kernel"                            # appliable_kernel_entries
 DAEMONS_SECTION = "daemons"                          # patch_userland
 DEVICETREE_SECTION = "devicetree"                    # dt_patch flags, not offsets
@@ -116,6 +122,7 @@ def _wrap_raw_to_im4p(raw_path: str | Path, im4p_path: str | Path, tag: str = ""
         import img4wrap
         description = ""
         destination = Path(im4p_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():                 # keep Apple's metadata on rewrap
             try:
                 description = img4wrap.unwrap_file(destination).description
@@ -164,7 +171,7 @@ def _apply_dict_patches(fp, patches: dict, section_name: str) -> int:
 
 def patch_ibss(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
     """Patch iBSS: resolve the device's iBSS, apply the ibss patches, rewrap."""
-    print(stage("1/6", "Patching iBSS"))
+    print(stage("1/7", "Patching iBSS"))
     ibss_patches = offsets.get("patches", {}).get("ibss", {})
 
     src, candidates, reason = components.find_component(ipsw_dir, "ibss", offsets,
@@ -196,7 +203,7 @@ def patch_ibss(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> boo
 
 def patch_ibec(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
     """Patch iBEC: resolve the device's iBEC, apply the ibec patches, rewrap."""
-    print(stage("2/6", "Patching iBEC"))
+    print(stage("2/7", "Patching iBEC"))
     ibec_patches = offsets.get("patches", {}).get("ibec", {})
 
     cfw_dir = Path(ipsw_dir).parent / "CFW" / "Firmware" / "dfu"
@@ -233,7 +240,7 @@ def patch_ibec(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> boo
 
 def patch_devicetree(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
     """Patch DeviceTree with the native FDT patcher (dt_patch.py)."""
-    print(stage("3/6", "Patching DeviceTree"))
+    print(stage("3/7", "Patching DeviceTree"))
     dt_flags = offsets.get("patches", {}).get("devicetree", {}) or {}
 
     src, _candidates, reason = components.find_component(ipsw_dir, "devicetree", offsets,
@@ -269,6 +276,66 @@ def patch_devicetree(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) 
     return _wrap_raw_to_im4p(raw, dest, "dtre")
 
 
+def blocked_entry(offsets: dict, section: str) -> dict | None:
+    """The profile's `blockers:` entry for one section, if it has one.
+
+    Blocked data looks valid but must never be applied (kernel offsets from
+    another board's kernelcache): the section is refused even under --force.
+    """
+    for entry in device_offsets.blocked_sections_of(offsets):
+        if str(entry.get("section")) == section:
+            return entry
+    return None
+
+
+def patch_txm(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
+    """Patch TXM: resolve the device's txm component, apply the txm patches, rewrap.
+
+    The profiles always carried a `txm` section (query_module0/1/2,
+    constraint-signature no-ops, allowed_before_secure_channel) and no code path
+    applied it, so every CFW booted with Apple's module validation intact.
+    Upstream's make_cfw.py extracts, patches and rewraps
+    Firmware/txm.iphoneos.release.im4p; this is that step.
+    """
+    print(stage("4/7", "Patching TXM"))
+    txm_patches = offsets.get("patches", {}).get(TXM_SECTION, {})
+    if not isinstance(txm_patches, dict) or not txm_patches:
+        print(warn("No txm patches defined — skipping"))
+        _note(TXM_SECTION, "skipped", "no txm section in this profile")
+        return True
+
+    blocker = blocked_entry(offsets, TXM_SECTION)
+    if blocker:
+        print(err(f"txm section is BLOCKED for {offsets.get('model', '?')} — refusing to patch"))
+        print(f"    {C.DIM}{str(blocker.get('reason', '')).strip()}{C.NC}")
+        _note(TXM_SECTION, "skipped", f"blocked: {str(blocker.get('reason', '')).strip()[:120]}")
+        return True
+
+    src, _candidates, reason = components.find_component(ipsw_dir, TXM_SECTION, offsets,
+                                                         force=FORCE_COMPONENT)
+    if src is None:
+        print(warn(f"TXM not found for {offsets.get('model', '?')}: {reason}"))
+        _note(TXM_SECTION, "skipped", reason)
+        return True
+    print(f"    {C.DIM}component: {src.name}{C.NC}")
+
+    raw = Path(work_dir) / "TXM.raw"
+    if not _extract_im4p_to_raw(src, raw):
+        print(err("Failed to extract TXM"))
+        _note(TXM_SECTION, "failed", "extract")
+        return False
+
+    with open(raw, "r+b") as fp:
+        count = _apply_dict_patches(fp, txm_patches, TXM_SECTION)
+    _note(TXM_SECTION, "patched", f"{count} entries → {src.name}")
+
+    if DRY_RUN:
+        return True
+
+    dest = Path(ipsw_dir) / "Firmware" / src.name
+    return _wrap_raw_to_im4p(raw, dest, TXM_FOURCC)
+
+
 def appliable_kernel_entries(kernel_patches: list) -> tuple[list, list]:
     """Split kernel entries into (appliable, refused).
 
@@ -290,7 +357,7 @@ def appliable_kernel_entries(kernel_patches: list) -> tuple[list, list]:
 
 def patch_kernel(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
     """Patch kernelcache: resolve the device's own kernelcache, apply patches."""
-    print(stage("4/6", "Patching Kernel"))
+    print(stage("5/7", "Patching Kernel"))
     kernel_patches = offsets.get("patches", {}).get("kernel", [])
 
     src, candidates, reason = components.find_component(ipsw_dir, "kernelcache", offsets,
@@ -370,7 +437,7 @@ def patch_restoreramdisk(ipsw_dir: str | Path, offsets: dict, work_dir: str | Pa
     this pure-Python path does not do, so the section is reported as skipped
     instead of silently "succeeding".
     """
-    print(stage("5/6", "Patching RestoreRamdisk"))
+    print(stage("6/7", "Patching RestoreRamdisk"))
     rd_patches = offsets.get("patches", {}).get("restoreramdisk", {})
 
     if not rd_patches:
@@ -437,7 +504,7 @@ def _daemon_binaries(ipsw_dir: str | Path, names) -> dict[str, Path]:
 
 def patch_userland(ipsw_dir: str | Path, offsets: dict, work_dir: str | Path) -> bool:
     """Patch userland daemons (coreauthd, ctkd, mobileactivationd)."""
-    print(stage("6/6", "Patching Userland Daemons"))
+    print(stage("7/7", "Patching Userland Daemons"))
     daemon_patches = offsets.get("patches", {}).get("daemons", {})
 
     if not daemon_patches:
@@ -580,9 +647,10 @@ def dry_run_plan(ipsw_dir: str | Path, offsets: dict) -> dict:
     `--check-only` reads this. Every entry lands in exactly one bucket, so a dry
     run can neither advertise a site a build would not write (an offset-only
     entry used to be printed as patchable while the applier skipped it) nor stay
-    silent about a section the build path does not apply at all (the profile's
-    `txm` section today: the dry run used to end with "all patches validated"
-    while those entries were missing from the build).
+    silent about a section the build path does not apply at all. That last
+    bucket is empty for the sections DICT_SECTIONS names, including `txm` (it
+    had no patcher until the TXM step was added, so the dry run used to end with
+    "all patches validated" while six verified sites were missing from a build).
 
       patchable  entries the build path writes
       skipped    the section is applied, this entry is not: pending sentinel,
@@ -736,7 +804,7 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
             # Simulate all patch steps
             print(section("Patch Simulation"))
             if ipsw_path.is_dir():
-                for kind in ("ibss", "ibec", "devicetree", "kernelcache", "restoreramdisk"):
+                for kind in ("ibss", "ibec", "devicetree", "txm", "kernelcache", "restoreramdisk"):
                     path, _cands, _reason = components.find_component(ipsw_path, kind, offsets)
                     stem = components.component_stem(offsets, kind)
                     label = f"{C.DIM}{kind}{C.NC}"
@@ -782,13 +850,17 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
             shutil.rmtree(work_dir)
             return True
 
-        # Extract IPSW (it's a ZIP)
-        ipsw_dir = Path(tempfile.mkdtemp(prefix="usbliter8_ipsw_"))
-        print(info(f"Extracting IPSW to {ipsw_dir}..."))
-        import zipfile
-        with zipfile.ZipFile(ipsw_path) as zf:
-            zf.extractall(ipsw_dir)
-        print(ok("IPSW extracted"))
+        # Extract IPSW (it's a ZIP) — or patch an already-extracted tree in place
+        if ipsw_path.is_dir():
+            ipsw_dir = ipsw_path
+            print(info(f"IPSW already extracted — patching {ipsw_dir} in place"))
+        else:
+            ipsw_dir = Path(tempfile.mkdtemp(prefix="usbliter8_ipsw_"))
+            print(info(f"Extracting IPSW to {ipsw_dir}..."))
+            import zipfile
+            with zipfile.ZipFile(ipsw_path) as zf:
+                zf.extractall(ipsw_dir)
+            print(ok("IPSW extracted"))
 
         # Run patches
         try:
@@ -796,6 +868,7 @@ def build_cfw(ipsw_path: Path, offsets_path: Path) -> bool:
                 patch_ibss(ipsw_dir, offsets, work_dir),
                 patch_ibec(ipsw_dir, offsets, work_dir),
                 patch_devicetree(ipsw_dir, offsets, work_dir),
+                patch_txm(ipsw_dir, offsets, work_dir),
                 patch_kernel(ipsw_dir, offsets, work_dir),
                 patch_restoreramdisk(ipsw_dir, offsets, work_dir),
                 patch_userland(ipsw_dir, offsets, work_dir),

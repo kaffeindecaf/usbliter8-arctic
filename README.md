@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-478%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-482%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 12,400 lines of Python in 27 modules, 478 tests. Two pip packages cover the basics (pyusb, pyyaml). pyimg4 is only needed to read firmware components off macOS, and capstone only for beta migration.
+Around 12,400 lines of Python in 27 modules, 482 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -102,7 +102,7 @@ Bootloader names are not board names. Apple names iPad bootloaders after the SoC
 
 Profile status: verified offsets for iPhone 11 Pro on 27.0b2/b3, and for iPhone 11 on 27.0 (24A437) plus 27.0b4 (24A5390f) imported from Liter8 fixtures. iPhone 11 Pro Max shares the Pro's kernel cache. iPhone 11, SE 2 and iPad 9 ship their own kernelcache binaries, so their kernel offsets have to come from that binary (the propagator refuses to copy across components). A12 devices top out at iOS 26 and need first-offset bootstrapping ([docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md), or `./usbliter8 bootstrap <Model> <iOS>` for the run sheet of a device that has no profile yet). Live table: `python3 profile_gen.py coverage`.
 
-**iPad 9 is not flashable yet**, for one narrow reason. iBSS/iBEC/TXM offsets for 27.0b2/b3 were discovered from the device's own components (15/17 entries at 0.95 confidence), two `boot_args_string` sites score under 0.90 and stay pending. The kernel section is blocked: iPad 9 boots `kernelcache.release.ipad12p`, no verified offsets exist for it, and it cannot be derived here either, because the Apple Wiki publishes RootFS/Cryptex/SEP keys only for iPad12,x, so that kernelcache cannot be decrypted offline. The profile carries a `blockers:` entry saying exactly this, and the builder refuses those entries even under `--force`. Fixing it needs someone with an iPad 9 deriving the kernel sites, or a published `ipad12p` key.
+**iPad 9 is not flashable yet**, for two reasons. iBSS/iBEC/TXM offsets for 27.0b2/b3 were discovered from the device's own components, and five of them cannot be filled by the engine at all: the `boot_args_adrp`/`boot_args_add` pair and `ibec.keep_nonce_b` are values that depend on the build (a pc-relative immediate and a branch delta). The fill engine can only offer the instruction already sitting at the site, which would patch nothing, so those entries stay `pending` with that reason and now fail preflight as `no-op` if a value equal to the site's own instruction ever reaches a profile again. The kernel section is blocked: iPad 9 boots `kernelcache.release.ipad12p`, no verified offsets exist for it, and it cannot be derived here either, because the Apple Wiki publishes RootFS/Cryptex/SEP keys only for iPad12,x, so that kernelcache cannot be decrypted offline. The profile carries a `blockers:` entry saying exactly this, and the builder refuses those entries even under `--force`. Fixing it needs someone with an iPad 9 deriving the kernel sites and the boot-args slot address, or a published `ipad12p` key.
 
 ---
 
@@ -248,7 +248,7 @@ python3 preflight.py offsets/iPhone12,3_27.0b3.yaml --components research/extrac
 python3 cfw_builder.py iPhone12,3_27.0b3.ipsw offsets/iPhone12,3_27.0b3.yaml --check-only
 ```
 
-Each entry is classified: `match` (the recorded original bytes are there), `plausible` (decodes as a real instruction, nothing recorded yet), `already-patched`, `changed` (recorded bytes absent, so the profile does not belong to this component), `implausible`, `out-of-range`, `skipped` (no raw component: encrypted kernelcache or ramdisk, rootfs daemons). `pending: true` entries are skipped, never failed.
+Each entry is classified: `match` (the recorded original bytes are there), `plausible` (decodes as a real instruction, nothing recorded yet), `already-patched`, `no-op` (a site-dependent entry whose value is the site's own instruction, so the redirect it is for would never happen, and this blocks), `changed` (recorded bytes absent, so the profile does not belong to this component), `implausible`, `out-of-range`, `skipped` (no raw component: encrypted kernelcache or ramdisk, rootfs daemons). `pending: true` entries are skipped, never failed.
 
 `--record` writes what it verified to `offsets/evidence/<profile>.json` and that file is committed, which makes a profile self-verifying: point it at another board's firmware and it reports `changed` and blocks. Exit codes are 0 for ok or review and 2 for blocked, so CI or a script can gate a restore. Kernelcaches stay `skipped` until you decrypt them with the wiki IV and key. The builder runs this gate before patching and refuses a blocked profile unless you pass `--force`.
 
@@ -257,6 +257,8 @@ Each entry is classified: `match` (the recorded original bytes are there), `plau
 `cfw_builder.py` prints what the build actually did: `patched` / `skipped` / `mismatch` / `failed` per section, with the component file each section resolved to. Anything this path cannot apply is reported instead of disappearing:
 
 - DeviceTree is patched in-tree by `dt_patch.py` (content-protect removal, `no-effaceable-storage`, `boot-ios-diagnostics`, `ephemeral-storage`, optional `system_rw`) driven by the profile's flags. It no longer shells out to the upstream work dir's `patch_dt.py` and no longer skips the section when that directory is missing.
+- TXM is patched in-tree as well: the profile's `txm` section (queryModule0/1/2, the constraint-signature no-ops, `allowed_before_secure_channel`) is applied to `txm.iphoneos.release.im4p` and rewrapped into Apple's own container shape (fourcc `trxm`, description preserved), the same extract/patch/rewrap upstream's `make_cfw.py` does. Entries whose section is `blockers:`-marked are refused even under `--force`, like the kernel.
+- A build can also run against an already-extracted IPSW tree (a directory), which patches it in place instead of unzipping, so a component tree fetched with `fetch_components.py` is enough to exercise a real build.
 - RestoreRamdisk: on iOS 26/27 IPSWs the ramdisk is a bare root-level `.dmg` and those offsets target `restored_external` and `asr` inside the mounted image. That cannot be patched or re-signed here, so the build says so and warns that asr/FDR checks may fail on restore. Classic `.dmg.im4p` layouts are patched in place.
 - Kernel entries marked `invalid_component` (derived from another device's kernelcache) are refused even under `--force`.
 

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from colors import C, ok, err, warn, info, section
+import device_offsets
 import log_utils
 
 SCRIPT_DIR = Path(__file__).parent
@@ -260,7 +261,14 @@ def _discover_section(pending_section: Any, base_raw: bytes, target_raw: bytes,
                       base_section: Any, sec: str) -> int:
     """Cross-device pattern search: locate each base patch site in the target
     device's binary via the AArch64 fingerprint engine. Accepts only hits at
-    confidence >= 0.90 (hard rule); anything else stays pending."""
+    confidence >= 0.90 (hard rule); anything else stays pending.
+
+    A site-dependent entry (an adrp/add pair, keep_nonce_b's branch delta) is the
+    exception: the offset is found, but the only value the engine can offer is the
+    instruction already sitting there, which would patch nothing. Those entries
+    keep their located offset and stay pending with a reason, so a build cannot
+    claim a redirect that never happens.
+    """
     from migrate import normalize_section
     from fingerprint import migrate_site
 
@@ -272,14 +280,26 @@ def _discover_section(pending_section: Any, base_raw: bytes, target_raw: bytes,
             entry = _find_pending_entry(pending_section, name)
             if entry is not None:
                 entry["offset"] = r.target_offset
-                entry["pending"] = False
                 entry["method"] = "cross-device"
                 entry["confidence"] = round(r.confidence, 2)
-                if r.suggested_value:
-                    entry["value"] = r.suggested_value
-                    entry["value_recomputed"] = True
-                filled += 1
-                print(f"    {C.GRN}✓{C.NC} {sec}.{name}: 0x{r.target_offset:X}  (conf {r.confidence:.2f})")
+                if device_offsets.is_site_dependent(name):
+                    # The value cannot come from this run: a base-device copy is
+                    # wrong for this build and the site's own word patches nothing,
+                    # so the entry carries no value until a reviewed one arrives.
+                    entry.pop("value", None)
+                    entry.pop("value_recomputed", None)
+                    entry["pending"] = True
+                    entry["reason"] = device_offsets.SITE_DEPENDENT_REASON
+                    print(warn(f"    {sec}.{name}: site at 0x{r.target_offset:X} "
+                               f"(conf {r.confidence:.2f}), value NOT derivable — left pending"))
+                else:
+                    entry["pending"] = False
+                    if r.suggested_value:
+                        entry["value"] = r.suggested_value
+                        entry["value_recomputed"] = True
+                    filled += 1
+                    print(f"    {C.GRN}✓{C.NC} {sec}.{name}: 0x{r.target_offset:X}  "
+                          f"(conf {r.confidence:.2f})")
             else:
                 print(warn(f"    {sec}.{name}: matched 0x{r.target_offset:X} but entry missing in profile"))
         else:
@@ -381,10 +401,38 @@ def cmd_fill(args: list[str]):
     total = sum(v.get("filled", 0) for v in report.values())
     print()
     print(ok(f"{total} offset(s) discovered and written to {profile_path}"))
+    _warn_site_dependent_pending(profile)
     if as_json:
         print(json.dumps({"model": model, "profile": str(profile_path),
                           "sections": report, "filled": total}, indent=2))
     return 0
+
+
+def site_dependent_pending(profile: dict) -> list[str]:
+    """Located sites whose value cannot be derived ("section.entry", sorted).
+
+    A fill/propagate run finds these offsets but must not write the site's own
+    instruction as the patch value: that would be a no-op (see
+    device_offsets.SITE_DEPENDENT_ENTRIES). They stay pending until a reviewed
+    source (upstream script, Liter8 fixture, or a human) provides the value.
+    """
+    found = []
+    for sec, data in (profile.get("patches") or {}).items():
+        if not isinstance(data, dict):
+            continue
+        for name, entry in data.items():
+            if (isinstance(entry, dict) and entry.get("pending")
+                    and device_offsets.is_site_dependent(name)):
+                found.append(f"{sec}.{name}")
+    return sorted(found)
+
+
+def _warn_site_dependent_pending(profile: dict) -> None:
+    stayed = site_dependent_pending(profile)
+    if stayed:
+        print(warn(f"{len(stayed)} site-dependent entry/entries located but left pending "
+                   f"({', '.join(stayed)}): the value depends on this build, so it cannot be "
+                   f"copied from the site — see each entry's reason"))
 
 
 def cmd_propagate(args: list[str]):
@@ -541,6 +589,7 @@ def cmd_propagate(args: list[str]):
     dump_profile_yaml(profile, out_path)
     print()
     print(ok(f"Wrote {out_path.name} — verification: pending"))
+    _warn_site_dependent_pending(profile)
     passed, failed, errors = validate_offsets(out_path)
     pend = pending_entries(out_path)
     print(info(f"Post-write validation: {passed} valid · {failed} failed · {pend} pending"))
