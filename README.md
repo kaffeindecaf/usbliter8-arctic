@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-504%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-529%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 12,400 lines of Python in 27 modules, 504 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
+Around 13,350 lines of Python in 27 modules, 529 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -264,7 +264,9 @@ A build writes into components a restore hands to a device, so every write is tr
 - **The restore checks before it erases.** `restore_device()` verifies the work dir first: a tree that no longer matches its marker (stale, hand-edited, or rolled back) makes the restore refuse, with `UL8_FORCE_RESTORE=1` as the deliberate override for a CFW built by hand. A work dir without a marker says so instead of pretending it was checked.
 - **A section that is merely absent is `skipped`, never `failed`.** A missing iBSS, a rootfs that is not extracted, a ramdisk that cannot be patched: all reported, all visible in the manifest and the marker, none of them dressed up as success. The manifest prints `N section(s) NOT fully applied` and the summary tells you to weigh that before flashing.
 
-`tests/test_write_safety.py` pins all of this (21 tests): rollback, removal, fourcc/description preservation, out-of-range refusal, ASCII values still written, the originals round trip (including the out-of-tree CFW iBEC), marker hashing, tamper detection, and that the toolkit's own `.ul8-originals/` and marker are never resolved as components to patch.
+`tests/test_write_safety.py` pins all of this (21 tests): rollback, removal, fourcc/description preservation, out-of-range refusal, ASCII values still written, the originals round trip (including the out-of-tree CFW iBEC), marker hashing, tamper detection, and that the toolkit's own `.ul8-originals/` and marker are never resolved as components to patch. `tests/test_restore_gate.py` (7 tests) pins the gate itself: refuse, override, no-marker, the SSHRD-ramdisk warning, and that an SSHRD boot keeps the Ramdisk it replaces.
+
+An SSHRD boot swaps the work dir's `Ramdisk` for the SSH chain and leaves it swapped (the SSH session needs it). The Ramdisk it replaced is copied to `Ramdisk_pre_sshrd` the first time, and the work dir gets a `.ul8-sshrd` note, so `restore_device()` can warn you that a CFW restore from this work dir would build on an SSH ramdisk instead of Apple's - and where the original is.
 
 ## Patch manifest
 

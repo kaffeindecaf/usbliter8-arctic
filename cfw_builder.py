@@ -587,11 +587,6 @@ def verify_tree(ipsw_dir: str | Path, profile_path: Path | None = None) -> tuple
     return (not problems, problems + [f"unchecked: {u}" for u in unchecked])
 
 
-def _board_config(offsets: dict) -> str:
-    """Full board config id (e.g. d421ap) from the profile."""
-    return offsets.get("board", "d421ap")
-
-
 def _run(cmd: list[str], cwd: str | None = None, check: bool = False) -> subprocess.CompletedProcess:
     """Run a command (see toolchain.run); output is shown when VERBOSE."""
     if DRY_RUN:

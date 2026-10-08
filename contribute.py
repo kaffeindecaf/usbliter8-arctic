@@ -162,8 +162,14 @@ def cmd_status() -> int:
         extra = ""
         if f["pending"]:
             extra = f"  {C.AMB}{f['pending']} pending{C.NC}"
-        print(f"  {icon}{C.NC} {C.SNOW}{f['device']}{C.NC} ({C.DIM}{f['model']}{C.NC}) "
-              f"iOS {C.FROST}{f['ios']}{C.NC}  [{f['soc']}]  {count}{extra}")
+        if f["model"] == "?":
+            # a profile that fails validation never has its metadata read, so the row
+            # must name the file: "? (?) iOS ? [?] 0/1" said nothing about which file
+            row = f"{C.SNOW}{f['file']}{C.NC} {C.RED}(invalid profile){C.NC}"
+        else:
+            row = (f"{C.SNOW}{f['device']}{C.NC} ({C.DIM}{f['model']}{C.NC}) "
+                   f"iOS {C.FROST}{f['ios']}{C.NC}  [{f['soc']}]")
+        print(f"  {icon}{C.NC} {row}  {count}{extra}")
     return 0
 
 
@@ -201,18 +207,6 @@ def cmd_pr(args: list[str]) -> int:
     apticket = data.get("apticket", "?")
     pending = pending_entries(path)
     fname = path.name
-
-    patches = data.get("patches", {})
-    total_entries = 0
-    for sec, sec_data in patches.items():
-        if isinstance(sec_data, list):
-            total_entries += len(sec_data)
-        elif isinstance(sec_data, dict):
-            for entry in sec_data.values():
-                if isinstance(entry, dict):
-                    total_entries += 1
-                    if isinstance(list(entry.values())[0], dict):
-                        total_entries += len(entry) - 1
 
     print(header("PR Description (copy-paste ready)"))
     print()
