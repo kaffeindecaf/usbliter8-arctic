@@ -126,9 +126,7 @@ def test_missing_libusb_backend_explains_itself(monkeypatch):
 
 def test_missing_pyusb_points_at_pip(monkeypatch):
     monkeypatch.setattr(pwn_utils, "usb_core", lambda: None)
-    monkeypatch.setattr(pwn_utils, "usb_backend",
-                        lambda: (None, pwn_utils._USB.setdefault("problem", "")) if False
-                        else _pyusb_missing())
+    monkeypatch.setattr(pwn_utils, "usb_backend", _pyusb_missing)
     assert pwn_utils.detect_apple_dfu() is None
     assert "pip install pyusb" in pwn_utils.usb_problem()
 

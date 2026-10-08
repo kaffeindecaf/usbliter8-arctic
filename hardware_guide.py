@@ -366,7 +366,7 @@ def _guided_setup_impl():
     print()
     from deps import check_dependencies, install_dependencies
     results = check_dependencies()
-    for mod, pkg in (("usb", "pyusb"), ("yaml", "pyyaml")):
+    for pkg in ("pyusb", "pyyaml"):
         key = f"pkg_{pkg}"
         print(key_value(f"py {pkg}", f"{C.GRN}installed{C.NC}" if results[key] else f"{C.RED}missing{C.NC}"))
     print(key_value("libusb-1.0", f"{C.GRN}found{C.NC}" if results["libusb"] else f"{C.RED}missing{C.NC}"))
