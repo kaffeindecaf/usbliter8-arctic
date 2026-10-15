@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-529%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-553%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 13,350 lines of Python in 27 modules, 529 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
+Around 13,514 lines of Python in 27 modules, 553 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -29,7 +29,7 @@ Around 13,350 lines of Python in 27 modules, 529 tests. Two pip packages cover t
 
 ## What you get
 
-**Guided setup instead of guesswork.** Board picker (Waveshare RP2350-USB-A, Pico 2, RP2350-Zero, Tiny2350), wiring diagrams, LED states, firmware download with UF2 magic validation, and PWN verification that polls the board instead of assuming.
+**Guided setup instead of guesswork.** Board picker (Waveshare RP2350-USB-A, Pico 2, RP2350-Zero, Tiny2350), wiring diagrams, LED states, firmware download that checks the UF2 magic and the pinned sha256, and PWN verification that polls the board instead of assuming.
 
 **Profiles that know what they are.** Every offset profile is a YAML file with a per-entry sentinel, hex and type check, an active-device pointer, and an evidence file recording the original bytes preflight saw. A profile that drifted from its firmware reports that, it does not flash anyway.
 
@@ -112,7 +112,7 @@ Everything below this line is technical detail.
 
 | Arctic | Upstream usbliter8 |
 |---|---|
-| Guided setup: board picker, wiring, LED guide, firmware download with UF2 validation and retries | "Solder D+/D- and figure it out" |
+| Guided setup: board picker, wiring, LED guide, firmware download with UF2 magic + pinned sha256, retries | "Solder D+/D- and figure it out" |
 | Offset profiles: per device and iOS, validated, with evidence files and online source lookup | Offsets hardcoded in `make_cfw.py` |
 | Beta migration: pattern fingerprinting, confidence scored, delta fallback, canonical cross-check | Re-discover every offset by hand, every beta |
 | Hardware awareness: RP2350 VID/PID, DFU/WTF/restore states, PWN serial verification | Blind runs |
@@ -267,6 +267,8 @@ A build writes into components a restore hands to a device, so every write is tr
 `tests/test_write_safety.py` pins all of this (21 tests): rollback, removal, fourcc/description preservation, out-of-range refusal, ASCII values still written, the originals round trip (including the out-of-tree CFW iBEC), marker hashing, tamper detection, and that the toolkit's own `.ul8-originals/` and marker are never resolved as components to patch. `tests/test_restore_gate.py` (7 tests) pins the gate itself: refuse, override, no-marker, the SSHRD-ramdisk warning, and that an SSHRD boot keeps the Ramdisk it replaces.
 
 An SSHRD boot swaps the work dir's `Ramdisk` for the SSH chain and leaves it swapped (the SSH session needs it). The Ramdisk it replaced is copied to `Ramdisk_pre_sshrd` the first time, and the work dir gets a `.ul8-sshrd` note, so `restore_device()` can warn you that a CFW restore from this work dir would build on an SSH ramdisk instead of Apple's - and where the original is.
+
+The exploit firmware is pinned too. `validate_uf2()` only proves a file is *a* UF2: any rebuilt image with the same 8-byte header passes it, and that image is what the RP2350 runs against the device on every boot. So the board's prebuilt UF2 (Octopus1633/usbliter8-firmware) carries a sha256 in `hardware_guide.UF2_SHA256`, and a download whose bytes do not match is refused without retrying, because the retry would fetch the same bytes. The guided setup, the health check and the board line name what was actually checked (`present, sha256 pinned` vs `present, UF2 magic only` vs `present, pin skipped`), and a board without an entry is reported as unpinned instead of "verified". `UL8_SKIP_UF2_PIN=1` skips the pin on purpose and says so. To pin a board: flash it, run `sha256sum firmware/<name>.uf2` and add the hash. `tests/test_firmware_pin.py` (23 tests) covers the match, the mismatch, the unpinned board, the refusal and the local file matching the one real pin.
 
 ## Patch manifest
 

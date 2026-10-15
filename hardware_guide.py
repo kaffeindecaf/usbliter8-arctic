@@ -6,6 +6,7 @@ status/health checks, and pre-flash verification.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -36,6 +37,27 @@ UF2_FILES = {
     "waveshare_pizero":      "usbliter8.waveshare_rp2350_pizero.uf2",
     "pimoroni_tiny2350":      "usbliter8.pimoroni_tiny2350.uf2",
 }
+
+# sha256 of the prebuilt UF2s as published in Octopus1633/usbliter8-firmware.
+# The UF2 magic check below only proves a file is *a* UF2: any rebuilt or swapped
+# firmware with the same header passes it, and the CFW this board sends to the
+# device is what the whole chain trusts. A board listed here is pinned, so its
+# file has to be byte-identical before it counts as ready; a board without an
+# entry is reported as unpinned instead of "verified".
+#
+# The printed hash comes from the copy in firmware/ that this rig has flashed
+# (verify it yourself: sha256sum firmware/<name>.uf2). To pin another board,
+# download it and put its sha256 here.
+UF2_SHA256 = {
+    "waveshare_usb_a": "dc6f6f44e224359dc5ffef28bc11d5caf7e2a1bbd67ee7fb9b043a90295b7c29",
+}
+
+# the deliberate override, like UL8_FORCE_RESTORE: skip the pin and say so loudly
+SKIP_PIN_ENV = "UL8_SKIP_UF2_PIN"
+
+# a download message with this prefix means the bytes were rejected, so retrying
+# cannot help (as opposed to a transfer that failed)
+REFUSED_PREFIX = "refused:"
 
 
 BOARDS = [
@@ -92,14 +114,6 @@ def _save_config(cfg: dict):
         yaml.dump(cfg, f, default_flow_style=False)
 
 
-def check_firmware(board_id: str) -> bool:
-    """Check if firmware UF2 exists and is valid for the given board."""
-    fname = UF2_FILES.get(board_id)
-    if not fname:
-        return False
-    return validate_uf2(FW_DIR / fname)
-
-
 UF2_MAGICS = {0x0A324655, 0x9E5D5157, 0x0AB16F30}
 
 
@@ -117,14 +131,111 @@ def validate_uf2(path: Path) -> bool:
         return False
 
 
-def _download_once(url: str, dst: Path) -> tuple[bool, str]:
-    """Single download attempt. Returns (success, error_message)."""
+def _pin_skipped() -> bool:
+    return os.environ.get(SKIP_PIN_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def sha256_file(path: str | Path) -> str | None:
+    """sha256 of a file, or None when it cannot be read."""
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def check_uf2_hash(board_id: str, path: str | Path) -> tuple[bool | None, str]:
+    """Compare a UF2 against the sha256 pinned for its board.
+
+    Returns (verdict, note): None = this board has no pin (the bytes cannot be
+    vouched for), True = the file is the pinned build, False = it is not (or
+    could not be read). The magic check is a different question - it only says
+    the file is a UF2 at all.
+    """
+    if _pin_skipped():
+        return None, f"{SKIP_PIN_ENV} is set: the pinned sha256 is not checked"
+    pinned = UF2_SHA256.get(board_id)
+    if not pinned:
+        return None, (f"no pinned sha256 for {board_id or 'this board'}: only the UF2 magic is "
+                      f"checked, so a swapped build would not be caught")
+    got = sha256_file(path)
+    if got is None:
+        return False, f"could not read {Path(path).name} to hash it"
+    if got == pinned:
+        return True, f"sha256 matches the pinned {pinned}"
+    return False, (f"sha256 {got} does not match the pinned {pinned} for {board_id}: this is not "
+                   f"the build the toolkit pins")
+
+
+def firmware_status(board_id: str) -> tuple[bool, str]:
+    """(usable, one-line note) for the guided setup, the health check and the menu.
+
+    A board's file is usable when it is a UF2 and, if its board is pinned, when
+    it is byte-identical to the pinned build.
+    """
+    fname = UF2_FILES.get(board_id)
+    if not fname:
+        return False, "no firmware file is known for this board"
+    path = FW_DIR / fname
+    if not validate_uf2(path):
+        return False, f"{fname} is missing or not a UF2"
+    size = path.stat().st_size
+    verdict, note = check_uf2_hash(board_id, path)
+    if verdict is None:
+        state = "pin skipped" if _pin_skipped() else "unpinned"
+        return True, f"{fname} ({size:,} bytes, UF2 magic ok, {state})"
+    if verdict:
+        return True, f"{fname} ({size:,} bytes, sha256 pinned and matching)"
+    return False, note
+
+
+def check_firmware(board_id: str) -> bool:
+    """Check the board's firmware UF2 is usable (see firmware_status)."""
+    return firmware_status(board_id)[0]
+
+
+def firmware_state(board_id: str) -> tuple[bool, str, str]:
+    """(usable, state, detail) for the health check and the board line.
+
+    state names what was actually checked: "present, sha256 pinned",
+    "present, UF2 magic only", "not the pinned build" or "missing". The first
+    two are usable, and only the first one means the bytes were vouched for.
+    """
+    fname = UF2_FILES.get(board_id)
+    if not fname:
+        return False, "no firmware for this board", ""
+    path = FW_DIR / fname
+    verdict, note = check_uf2_hash(board_id, path) if path.is_file() else (None, "")
+    usable = check_firmware(board_id)
+    if usable and verdict:
+        return True, "present, sha256 pinned", note
+    if usable:
+        return True, "present, pin skipped" if _pin_skipped() else "present, UF2 magic only", note
+    if verdict is False:
+        return False, "not the pinned build", note
+    return False, "missing", note
+
+
+def _download_once(url: str, dst: Path, board_id: str | None = None) -> tuple[bool, str]:
+    """Single download attempt. Returns (success, error_message).
+
+    A message starting with REFUSED_PREFIX means the bytes were rejected (the
+    pin), not the transfer: the caller must not retry that one.
+    """
     try:
         urlretrieve(url, dst)
         size = dst.stat().st_size
         if size <= 1024 or not validate_uf2(dst):
             dst.unlink(missing_ok=True)
             return False, f"bad file ({size} bytes, invalid UF2 magic)"
+        if board_id:
+            verdict, note = check_uf2_hash(board_id, dst)
+            if verdict is False:
+                dst.unlink(missing_ok=True)
+                return False, f"{REFUSED_PREFIX} {note}"
         return True, ""
     except URLError as e:
         return False, f"network error — {e.reason}"
@@ -160,17 +271,34 @@ def download_firmware(board_id: str, retries: int = 3) -> bool:
                     print(info(f"Retry {attempt}/{retries} in {delay:.1f}s..."))
                     time.sleep(delay)
 
-                success, msg = _download_once(url, tmp)
+                success, msg = _download_once(url, tmp, board_id)
                 if success:
                     tmp.replace(dst)
                     size = dst.stat().st_size
-                    print(ok(f"Downloaded + verified {fname} ({size:,} bytes)"))
-                    log_info(f"Firmware downloaded: {fname} ({size} bytes)")
+                    verdict, note = check_uf2_hash(board_id, dst)
+                    if verdict:
+                        print(ok(f"Downloaded + verified {fname} ({size:,} bytes, sha256 pinned)"))
+                    else:
+                        print(ok(f"Downloaded {fname} ({size:,} bytes, UF2 magic ok)"))
+                        print(warn(note))
+                    log_info(f"Firmware downloaded: {fname} ({size} bytes, "
+                             f"{'pinned hash ok' if verdict else 'unpinned'})")
                     return True
 
                 tmp.unlink(missing_ok=True)
                 print(warn(f"Attempt {attempt}/{retries} failed: {msg}"))
                 log_warn(f"UF2 download attempt {attempt}/{retries} failed: {msg}")
+                if msg.startswith(REFUSED_PREFIX):
+                    # the bytes are not the pinned build: retrying downloads the
+                    # same bytes again, so stop and say what is wrong
+                    print()
+                    print(err(msg[len(REFUSED_PREFIX):].strip()))
+                    print(f"  {C.DIM}The toolkit pins this board's firmware because the CFW built "
+                          f"here gets flashed through it. If upstream published a new build, check "
+                          f"it and update UF2_SHA256 in hardware_guide.py; to skip the pin on "
+                          f"purpose, set {SKIP_PIN_ENV}=1.{C.NC}")
+                    log_error(f"UF2 refused for {board_id}: {msg}", module="hardware_guide")
+                    return False
 
             print(err(f"All {retries} download attempts failed — check your internet connection"))
             log_error(f"UF2 download failed after {retries} attempts: {url}")
@@ -398,10 +526,22 @@ def _guided_setup_impl():
     fname = UF2_FILES[board_id]
     fw_path = FW_DIR / fname
 
-    if check_firmware(board_id):
-        print(ok(f"Firmware ready: {fname} ({fw_path.stat().st_size:,} bytes, verified)"))
+    fw_ready, fw_note = firmware_status(board_id)
+    if fw_ready:
+        print(ok(f"Firmware ready: {fw_note}"))
+        if UF2_SHA256.get(board_id) is None and not _pin_skipped():
+            print(warn("Only the UF2 magic was checked: this board has no pinned sha256, so a "
+                       "swapped build would look exactly the same."))
+            print(f"  {C.DIM}To pin it, hash the file and add it to UF2_SHA256 in "
+                  f"hardware_guide.py.{C.NC}")
     else:
-        if fw_path.exists():
+        verdict, note = check_uf2_hash(board_id, fw_path) if fw_path.exists() else (None, "")
+        if verdict is False:
+            print(err(f"Existing {fname} is not the build this toolkit pins"))
+            print(f"  {C.DIM}{note}{C.NC}")
+            print(f"  {C.DIM}Delete it and re-download, or update UF2_SHA256 if upstream "
+                  f"published a new build (README, firmware section).{C.NC}")
+        elif fw_path.exists():
             print(warn(f"Existing {fname} is corrupt/incomplete — will re-download"))
         print(info(f"No valid firmware for {board['name']}"))
         if _confirm("Download firmware from Octopus1633/usbliter8-firmware? [Y/n]: ", "y"):
@@ -414,7 +554,7 @@ def _guided_setup_impl():
                 print(f"    4. Board will reboot — LED should start blinking")
                 print()
             else:
-                print(err("Firmware download failed — fix your network and re-run Guided Setup"))
+                print(err("Firmware download failed — see the reason above, then re-run Guided Setup"))
         else:
             print(info("Skipping firmware download. Re-run Guided Setup anytime."))
     print()
@@ -571,10 +711,13 @@ def run_health_check() -> dict[str, bool]:
     if not results["board_configured"]:
         print(warn("No board selected — run [1] Guided Setup first"))
 
-    # 2. Firmware
-    fw_ok = check_firmware(board_id)
+    # 2. Firmware: present, and are its bytes the build this board is pinned to
+    fw_ok, fw_state, fw_note = firmware_state(board_id)
     fw_name = UF2_FILES.get(board_id, "N/A")
-    print(key_value("Firmware", f"{fw_name} {'(' + C.GRN + 'present' + C.NC + ')' if fw_ok else '(' + C.RED + 'missing' + C.NC + ')'}"))
+    color = C.GRN if fw_state == "present, sha256 pinned" else (C.AMB if fw_ok else C.RED)
+    print(key_value("Firmware", f"{fw_name} ({color}{fw_state}{C.NC})"))
+    if not fw_ok and fw_note:
+        print(f"    {C.DIM}{fw_note}{C.NC}")
     results["firmware_present"] = fw_ok
 
     # 3. Tools
