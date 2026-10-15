@@ -167,7 +167,7 @@ def show_system_status():
 
 def show_board_status():
     """Display RP2350 board and firmware status."""
-    from hardware_guide import _load_config, check_firmware
+    from hardware_guide import _load_config, firmware_state
     cfg = _load_config()
     board_id = cfg.get("selected_board", "unknown")
     print(f"  {C.GREY}── microcontroller ──────────────────────────────────────────────{C.NC}")
@@ -182,8 +182,15 @@ def show_board_status():
     }
     name = board_names.get(board_id, board_id)
 
-    fw_ok = check_firmware(board_id)
-    fw_tag = f"{C.GRN}installed{C.NC}" if fw_ok else f"{C.RED}not installed{C.NC}"
+    fw_ok, fw_state, fw_note = firmware_state(board_id)
+    if fw_ok and fw_state == "present, sha256 pinned":
+        fw_tag = f"{C.GRN}installed{C.NC} (sha256 pinned)"
+    elif fw_ok:
+        fw_tag = f"{C.GRN}installed{C.NC} (unpinned)"
+    else:
+        fw_tag = f"{C.RED}not installed{C.NC}"
+        if fw_state == "not the pinned build":
+            fw_tag += f" {C.DIM}(pinned hash mismatch: {fw_note}){C.NC}"
 
     parts = [f"{C.EYE}{name}{C.NC}", f"firmware  {fw_tag}"]
 
