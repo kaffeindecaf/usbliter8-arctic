@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-553%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-561%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 13,514 lines of Python in 27 modules, 553 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
+Around 13,516 lines of Python in 27 modules, 561 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -493,6 +493,7 @@ usbliter8-arctic/
 ├── deps.py               # OS detection, dependency check and installer
 ├── log_utils.py          # usbliter8.log: errors, warnings, tracebacks, exit guard
 ├── version.py            # version + git commit of the checkout
+├── CHANGELOG.md          # what changed when, newest first (see the file for the rules)
 ├── colors.py             # ANSI helpers
 ├── .github/workflows/    # CI: compileall + safety check + profiles + tests (3.13 and 3.9)
 ├── docs/                 # BOOTSTRAPPING.md (first offsets for a new device), GLOSSARY.md
@@ -515,7 +516,7 @@ If you have offsets for a device and iOS combo that is not covered, the `contrib
 
 The wizard asks for the model and iOS version, creates the profile from the template with `DEADBEEF` sentinels, opens it in `$EDITOR`, validates your work, and refuses to generate a PR description until every sentinel is gone. The `pr` command prints a copy-paste-ready description (device table, patch counts) plus the git commands. Two rules from `OffsetMigrationChecklist.md` still apply: never rate an inferred offset above LOW confidence, and never let anything under 0.90 auto-write without review.
 
-First offsets for a device that has no profile at all are a longer sitting: [docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md) is the step-by-step procedure, and [docs/GLOSSARY.md](docs/GLOSSARY.md) defines the terms the output prints (PWND DFU, IMG4, IM4P, TXM, TSS proxy, confidence tiers).
+First offsets for a device that has no profile at all are a longer sitting: [docs/BOOTSTRAPPING.md](docs/BOOTSTRAPPING.md) is the step-by-step procedure, and [docs/GLOSSARY.md](docs/GLOSSARY.md) defines the terms the output prints (PWND DFU, IMG4, IM4P, TXM, TSS proxy, confidence tiers). [CHANGELOG.md](CHANGELOG.md) records what changed when, newest first, with the report a fix came from.
 
 ## Patch overview
 
