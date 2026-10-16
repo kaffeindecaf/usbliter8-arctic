@@ -24,7 +24,8 @@ Checks that FAIL the run:
 Checks that only WARN (use --strict to fail on them too):
 
   6. badge drift        README "tests-N passing" vs the collected test count
-  7. docs style         em dashes in the README (house style: none)
+  7. docs style         em dashes in the README, CHANGELOG or docs/ (house
+                        style: none)
 
 Usage:
   python3 safety_check.py [--json] [--quiet] [--strict]
@@ -320,7 +321,7 @@ def check_badge(files: list[str]) -> list[str]:
 def check_docs_style(files: list[str]) -> list[str]:
     problems = []
     for rel in files:
-        if Path(rel).suffix not in TEXT_SUFFIXES or not rel.startswith(("README", "docs/")):
+        if Path(rel).suffix not in TEXT_SUFFIXES or not rel.startswith(("README", "CHANGELOG", "docs/")):
             continue
         count = read(rel).count("\u2014")
         if count:
