@@ -24,7 +24,9 @@ Checks that FAIL the run:
 Checks that only WARN (use --strict to fail on them too):
 
   6. badge drift        README "tests-N passing" vs the collected test count
-  7. docs style         em dashes in the README, CHANGELOG or docs/ (house
+  7. doc counts         README prose numbers (suite test count, lines of Python
+                        in N modules, audit bug count) vs the repo itself
+  8. docs style         em dashes in the README, CHANGELOG or docs/ (house
                         style: none)
 
 Usage:
@@ -297,6 +299,17 @@ def check_shadowed_imports(files: list[str]) -> list[str]:
     return problems
 
 
+def _collected_tests() -> int | None:
+    """The suite's collected test count, or None when pytest cannot say."""
+    try:
+        out = subprocess.run([sys.executable, "-m", "pytest", "tests/", "--collect-only",
+                              "-q"], cwd=ROOT, capture_output=True, text=True, timeout=600)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    counts = [int(n) for n in re.findall(r"(\d+) tests? collected", out.stdout)]
+    return max(counts) if counts else None
+
+
 def check_badge(files: list[str]) -> list[str]:
     if "README.md" not in files:
         return []
@@ -304,18 +317,73 @@ def check_badge(files: list[str]) -> list[str]:
     if not match:
         return ["README.md: no 'tests-N passing' badge found"]
     claimed = int(match.group(1))
-    try:
-        out = subprocess.run([sys.executable, "-m", "pytest", "tests/", "--collect-only",
-                              "-q"], cwd=ROOT, capture_output=True, text=True, timeout=600)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return ["could not count tests (pytest unavailable)"]
-    counts = [int(n) for n in re.findall(r"(\d+) tests? collected", out.stdout)]
-    if not counts:
-        return ["could not parse the collected test count"]
-    actual = max(counts)
+    actual = _collected_tests()
+    if actual is None:
+        return ["could not count tests (pytest unavailable or its output changed)"]
     if actual != claimed:
         return [f"README.md: badge says {claimed} tests, {actual} are collected"]
     return []
+
+
+def python_size(files: list[str]) -> tuple[int, int]:
+    """(lines, modules) of the toolkit, for the claim in the README intro.
+
+    The toolkit is the root modules: `tests/` is the suite and `research/` is
+    gitignored working data, so neither belongs in "N lines in M modules".
+    """
+    modules = sorted(f for f in files if f.endswith(".py") and "/" not in f)
+    return sum(len(read(f).splitlines()) for f in modules), len(modules)
+
+
+SUITE_CLAIM = re.compile(r"\b(\d{2,5}) tests\b")
+SIZE_CLAIM = re.compile(r"([\d,]+) lines of Python in (\d+) modules?")
+BUGS_CLAIM = re.compile(r"\b(\d+) audit bugs\b")
+FOUNDBUG_ROW = re.compile(r"^- \[[ x]\] \*\*#(\d+)", re.M)
+
+
+def check_doc_counts(files: list[str]) -> list[str]:
+    """README numbers must match the repo they describe.
+
+    `check_badge` watched the badge URL only, so a "462 tests" line in the
+    comparison table and a "22 audit bugs" line outlived three months of
+    growth with the badge correct above them. A number a reader trusts gets
+    the same gate as the badge. Per-file claims ("`tests/x.py` (21 tests)" on a
+    line that names the file) are not suite totals and are skipped.
+    """
+    if "README.md" not in files:
+        return []
+    problems: list[str] = []
+    suite_total: int | None = None
+    suite_counted = False
+    bug_numbers: set[int] | None = None
+    for lineno, line in enumerate(read("README.md").splitlines(), 1):
+        per_file = "tests/test_" in line          # names the file it counts
+        if not per_file and "tests-" not in line:  # "tests-" is the badge
+            for claim in SUITE_CLAIM.finditer(line):
+                if not suite_counted:
+                    suite_total, suite_counted = _collected_tests(), True
+                if suite_total is None:
+                    problems.append("could not count tests (pytest unavailable or its output changed)")
+                elif int(claim.group(1)) != suite_total:
+                    problems.append(f"README.md:{lineno}: says {claim.group(1)} tests, "
+                                    f"{suite_total} are collected")
+
+        size = SIZE_CLAIM.search(line)
+        if size:
+            claimed_lines, claimed_modules = int(size.group(1).replace(",", "")), int(size.group(2))
+            lines, modules = python_size(files)
+            if (lines, modules) != (claimed_lines, claimed_modules):
+                problems.append(f"README.md:{lineno}: says {size.group(1)} lines of Python in "
+                                f"{claimed_modules} modules, the tree has {lines} in {modules}")
+
+        bugs = BUGS_CLAIM.search(line)
+        if bugs:
+            if bug_numbers is None:
+                bug_numbers = {int(n) for n in FOUNDBUG_ROW.findall(read("foundbugs.md"))}
+            if bug_numbers and int(bugs.group(1)) != len(bug_numbers):
+                problems.append(f"README.md:{lineno}: says {bugs.group(1)} audit bugs, "
+                                f"foundbugs.md records {len(bug_numbers)}")
+    return problems
 
 
 def check_docs_style(files: list[str]) -> list[str]:
@@ -362,7 +430,8 @@ def main(argv: list[str] | None = None) -> int:
     evidence_problems, evidence_notes = check_evidence(files)
     results["evidence drift"] = evidence_problems
     failures += evidence_problems
-    for name, runner in (("test badge", check_badge), ("docs style", check_docs_style)):
+    for name, runner in (("test badge", check_badge), ("doc counts", check_doc_counts),
+                         ("docs style", check_docs_style)):
         found = runner(files)
         results[name] = found
         warnings += found

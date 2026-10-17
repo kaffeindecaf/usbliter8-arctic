@@ -9,6 +9,19 @@ drifts. Security-relevant fixes name the report they came from (`foundbugs.md`).
 
 ## 0.2.0-beta - 2026-10-15
 
+### 2026-10-17 - doc counts
+
+- `safety_check.py` gained a `doc counts` warning: the README's prose numbers
+  must match the repo. The suite count in prose is compared with
+  `pytest --collect-only`, "N lines of Python in M modules" with the root
+  modules, and "N audit bugs" with the rows in `foundbugs.md`.
+- the badge check never looked past its own URL, so the comparison table still
+  advertised 462 tests and 22 audit bugs while the suite had 561 and
+  `foundbugs.md` recorded 33. Both lines are corrected, badge included.
+- 6 tests in `tests/test_safety_check.py` pin the check: stale vs matching
+  count, a per-file claim is not a suite claim, module/line drift, audit bug
+  drift, and warning-only (not failing) through `main()`.
+
 ### 2026-10-15 - firmware pins (H1.1)
 
 - the prebuilt UF2s are pinned by sha256, not only magic-checked:
