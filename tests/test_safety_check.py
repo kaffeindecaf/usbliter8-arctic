@@ -208,6 +208,62 @@ def test_badge_drift_is_reported(fake_repo, monkeypatch):
     assert problems and "badge says 7" in problems[0]
 
 
+class _Collected:
+    """A stand-in for the pytest --collect-only run the count checks make."""
+
+    def __init__(self, count: int):
+        self.stdout = f"{count} tests collected in 0.10s"
+
+
+def test_stale_prose_test_count_is_reported(fake_repo, monkeypatch):
+    write(fake_repo, "README.md", "# x\n\n| 42 tests, a b2 to b3 oracle | y |\n")
+    monkeypatch.setattr(safety_check.subprocess, "run", lambda *a, **k: _Collected(156))
+    problems = safety_check.check_doc_counts(["README.md"])
+    assert problems and "says 42 tests" in problems[0] and "156" in problems[0]
+
+
+def test_matching_prose_test_count_passes(fake_repo, monkeypatch):
+    write(fake_repo, "README.md", "Around 2 lines of Python in 2 modules, 156 tests.\n")
+    (fake_repo / "a.py").write_text("x = 1\n")
+    (fake_repo / "b.py").write_text("y = 2\n")
+    monkeypatch.setattr(safety_check.subprocess, "run", lambda *a, **k: _Collected(156))
+    assert safety_check.check_doc_counts(["README.md", "a.py", "b.py"]) == []
+
+
+def test_a_per_file_test_count_is_not_a_suite_claim(fake_repo, monkeypatch):
+    """`tests/test_x.py` (21 tests) counts one file, so pytest is not consulted."""
+    write(fake_repo, "README.md", "`tests/test_write_safety.py` pins all of it (21 tests).\n")
+    monkeypatch.setattr(safety_check.subprocess, "run",
+                        lambda *a, **k: _Collected(999))       # would flag 21 as stale
+    assert safety_check.check_doc_counts(["README.md"]) == []
+
+
+def test_stale_module_count_is_reported(fake_repo):
+    write(fake_repo, "README.md", "Around 9,999 lines of Python in 2 modules.\n")
+    (fake_repo / "a.py").write_text("x = 1\ny = 2\n")
+    (fake_repo / "b.py").write_text("z = 3\n")
+    problems = safety_check.check_doc_counts(["README.md", "a.py", "b.py"])
+    assert problems and "9,999 lines of Python in 2 modules" in problems[0]
+    assert "the tree has 3 in 2" in problems[0]
+
+
+def test_stale_audit_bug_count_is_reported(fake_repo):
+    write(fake_repo, "README.md", "| 22 audit bugs found and fixed (`foundbugs.md`) | x |\n")
+    write(fake_repo, "foundbugs.md", "- [x] **#1 a**\n- [x] **#2 b**\n- [x] **#30 c**\n")
+    problems = safety_check.check_doc_counts(["README.md", "foundbugs.md"])
+    assert problems and "says 22 audit bugs" in problems[0] and "records 3" in problems[0]
+
+
+def test_a_stale_count_is_a_warning_not_a_failure(fake_repo, monkeypatch, capsys):
+    monkeypatch.setattr(safety_check, "git_files", lambda: ["README.md", "foundbugs.md"])
+    write(fake_repo, "README.md", "| 22 audit bugs found and fixed |\n")
+    write(fake_repo, "foundbugs.md", "- [x] **#1 a**\n")
+    assert safety_check.main([]) == 0                     # warning only
+    out = capsys.readouterr().out
+    assert "doc counts" in out and "says 22 audit bugs" in out
+    assert safety_check.main(["--strict"]) == 1
+
+
 def test_em_dashes_in_readme_are_reported(fake_repo):
     write(fake_repo, "README.md", "a — b\n")
     assert safety_check.check_docs_style(["README.md"])

@@ -2,7 +2,7 @@
 
 The usbliter8 tethered jailbreak, wrapped in something you can actually operate. One TUI walks the whole chain, offsets live in validated YAML profiles, and nothing gets flashed before the profile has been checked against the real firmware bytes.
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-561%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
+![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB) ![Tests](https://img.shields.io/badge/tests-567%20passing-2ea44f) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-5272A8) ![Exploit](https://img.shields.io/badge/exploit-usbliter8_%E2%80%A2_RP2350-8B5CF6)
 
 Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. One wrong number and the device panics on boot. This repo keeps the same exploit (rav000's RP2350 firmware) and rebuilds the parts that hurt:
 
@@ -11,7 +11,7 @@ Upstream usbliter8 is a folder of shell scripts and offsets you edit by hand. On
 - a preflight gate that compares every patch site against the actual firmware before the builder touches anything
 - a build that prints what it patched, what it skipped, and why
 
-Around 13,516 lines of Python in 27 modules, 561 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
+Around 13,585 lines of Python in 27 modules, 567 tests. Two pip packages cover the basics (pyusb, pyyaml); `capstone` is only needed for beta migration. Most Apple components are lzfse-compressed, so `pyimg4` (or the `lzfse` module) is what lets any host read or rewrite them; without a decoder the tools say `unverifiable` / `install pyimg4` instead of comparing offsets against compressed bytes.
 
 ```
    [ IPSW ]  +  [ offset profile ]             [ RP2350 board ]
@@ -120,7 +120,7 @@ Everything below this line is technical detail.
 | Restore flow with pre-checks, PWN verification, TSS proxy lifecycle, explicit `YES`, post-write validation | Run `restore_cfw.sh` and pray |
 | Post-boot toolkit: USB networking, VNC, SSH (password via `SSHPASS`, never in `ps`) | Manual setup |
 | Health check and dependency installer for apt/pacman/dnf/zypper/brew/pip | Cryptic pip errors |
-| 462 tests, a b2 to b3 ground-truth oracle, 22 audit bugs found and fixed (`foundbugs.md`) | Hacked together |
+| 567 tests, a b2 to b3 ground-truth oracle, 33 audit bugs found and fixed (`foundbugs.md`) | Hacked together |
 
 ## How the chain works
 
@@ -439,10 +439,10 @@ The repo is public and its output gets flashed onto real hardware, so two kinds 
 
 ```bash
 python3 safety_check.py            # the same gate CI runs
-python3 safety_check.py --strict   # warnings (badge drift, docs style) fail too
+python3 safety_check.py --strict   # warnings (badge and doc counts, docs style) fail too
 ```
 
-`safety_check.py` fails on private keys, tokens or UDIDs in tracked files, machine-local home paths, tracked generated files, profiles that do not validate or whose file name disagrees with `model` and `ios_version`, a profile claiming to be verified while it still has pending entries or blockers, and `offsets/evidence/*.json` whose recorded offsets no longer match the profile. It warns on the test badge drifting from the collected count and on em dashes in docs. Append `# safety-allow: <reason>` to a line you deliberately want to keep.
+`safety_check.py` fails on private keys, tokens or UDIDs in tracked files, machine-local home paths, tracked generated files, profiles that do not validate or whose file name disagrees with `model` and `ios_version`, a profile claiming to be verified while it still has pending entries or blockers, and `offsets/evidence/*.json` whose recorded offsets no longer match the profile. It warns on the test badge and the README's prose numbers (suite test count, lines of Python in N modules, audit bug count) drifting from the repo, and on em dashes in docs. Append `# safety-allow: <reason>` to a line you deliberately want to keep.
 
 CI runs `compileall`, `safety_check.py`, every profile through `device_offsets.py validate`, and the test suite on 3.13, plus the suite on 3.9.
 
