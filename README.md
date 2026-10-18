@@ -41,16 +41,33 @@ Around 13,585 lines of Python in 27 modules, 567 tests. Two pip packages cover t
 
 Linux, macOS and Windows all work. The first run detects your OS, checks what is missing and offers to install it.
 
+### Linux
+
+Some raw USB operations need root. On Linux, run those commands with `sudo`.
+
 ```bash
-# Linux (root for raw USB) and macOS (no sudo)
 git clone https://github.com/kaffeindecaf/usbliter8-arctic.git
 cd usbliter8-arctic
-chmod +x usbliter8 main.py
+chmod +x usbliter8
 sudo ./usbliter8
 ```
 
+### macOS
+
+No `sudo` is needed.
+
+```bash
+git clone https://github.com/kaffeindecaf/usbliter8-arctic.git
+cd usbliter8-arctic
+chmod +x usbliter8
+./usbliter8
+```
+
+### Windows
+
+Use PowerShell and launch the Python TUI directly. USB access also needs the drivers described in [Dependencies](#dependencies-detected-and-offered).
+
 ```powershell
-# Windows
 git clone https://github.com/kaffeindecaf/usbliter8-arctic.git
 cd usbliter8-arctic
 py main.py
